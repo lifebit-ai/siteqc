@@ -1,16 +1,15 @@
 #!/usr/bin/env nextflow
 /*
 ========================================================================================
-                         nf-core/siteqc
+                         siteqc
 ========================================================================================
- nf-core/siteqc Analysis Pipeline.
- #### Homepage / Documentation
- https://github.com/nf-core/siteqc
+siteqc Analysis Pipeline.
+#### Homepage / Documentation
 ----------------------------------------------------------------------------------------
 */
 
 def helpMessage() {
-    // TODO nf-core: Add to this help message with new command line parameters
+    // TODO : Add to this help message with new command line parameters
     log.info nfcoreHeader()
     log.info"""
 
@@ -18,7 +17,7 @@ def helpMessage() {
 
     The typical command for running the pipeline is as follows:
 
-    nextflow run nf-core/siteqc --input '*_R{1,2}.fastq.gz' -profile docker
+    nextflow run  lifebit-ai/siteqc --input .. -profile docker
 
     Mandatory arguments:
       --input [file]                  Path to input data (must be surrounded with quotes)
@@ -57,22 +56,6 @@ if (params.help) {
  * SET UP CONFIGURATION VARIABLES
  */
 
-// Check if genome exists in the config file
-if (params.genomes && params.genome && !params.genomes.containsKey(params.genome)) {
-    exit 1, "The provided genome '${params.genome}' is not available in the iGenomes file. Currently the available genomes are ${params.genomes.keySet().join(", ")}"
-}
-
-// TODO nf-core: Add any reference files that are needed
-// Configurable reference genomes
-//
-// NOTE - THIS IS NOT USED IN THIS PIPELINE, EXAMPLE ONLY
-// If you want to use the channel below in a process, define the following:
-//   input:
-//   file fasta from ch_fasta
-//
-params.fasta = params.genome ? params.genomes[ params.genome ].fasta ?: false : false
-if (params.fasta) { ch_fasta = file(params.fasta, checkIfExists: true) }
-
 // Has the run name been specified by the user?
 // this has the bonus effect of catching both -name and --name
 custom_runName = params.name
@@ -91,45 +74,11 @@ if (workflow.profile.contains('awsbatch')) {
     if (params.tracedir.startsWith('s3:')) exit 1, "Specify a local tracedir or run without trace! S3 cannot be used for tracefiles."
 }
 
-// Stage config files
-ch_multiqc_config = file("$baseDir/assets/multiqc_config.yaml", checkIfExists: true)
-ch_multiqc_custom_config = params.multiqc_config ? Channel.fromPath(params.multiqc_config, checkIfExists: true) : Channel.empty()
-ch_output_docs = file("$baseDir/docs/output.md", checkIfExists: true)
-ch_output_docs_images = file("$baseDir/docs/images/", checkIfExists: true)
-
-/*
- * Create a channel for input read files
- */
-if (params.input_paths) {
-    if (params.single_end) {
-        Channel
-            .from(params.input_paths)
-            .map { row -> [ row[0], [ file(row[1][0], checkIfExists: true) ] ] }
-            .ifEmpty { exit 1, "params.input_paths was empty - no input files supplied" }
-            .into { ch_read_files_fastqc; ch_read_files_trimming }
-    } else {
-        Channel
-            .from(params.input_paths)
-            .map { row -> [ row[0], [ file(row[1][0], checkIfExists: true), file(row[1][1], checkIfExists: true) ] ] }
-            .ifEmpty { exit 1, "params.input_paths was empty - no input files supplied" }
-            .into { ch_read_files_fastqc; ch_read_files_trimming }
-    }
-} else {
-    Channel
-        .fromFilePairs(params.input, size: params.single_end ? 1 : 2)
-        .ifEmpty { exit 1, "Cannot find any reads matching: ${params.input}\nNB: Path needs to be enclosed in quotes!\nIf this is single-end data, please specify --single_end on the command line." }
-        .into { ch_read_files_fastqc; ch_read_files_trimming }
-}
-
 // Header log info
 log.info nfcoreHeader()
 def summary = [:]
 if (workflow.revision) summary['Pipeline Release'] = workflow.revision
-summary['Run Name']         = custom_runName ?: workflow.runName
 // TODO nf-core: Report custom parameters here
-summary['Input']            = params.input
-summary['Fasta Ref']        = params.fasta
-summary['Data Type']        = params.single_end ? 'Single-End' : 'Paired-End'
 summary['Max Resources']    = "$params.max_memory memory, $params.max_cpus cpus, $params.max_time time per job"
 if (workflow.containerEngine) summary['Container'] = "$workflow.containerEngine - $workflow.container"
 summary['Output dir']       = params.outdir
@@ -147,32 +96,8 @@ if (params.config_profile_description) summary['Config Profile Description'] = p
 if (params.config_profile_contact)     summary['Config Profile Contact']     = params.config_profile_contact
 if (params.config_profile_url)         summary['Config Profile URL']         = params.config_profile_url
 summary['Config Files'] = workflow.configFiles.join(', ')
-if (params.email || params.email_on_fail) {
-    summary['E-mail Address']    = params.email
-    summary['E-mail on failure'] = params.email_on_fail
-    summary['MultiQC maxsize']   = params.max_multiqc_email_size
-}
 log.info summary.collect { k,v -> "${k.padRight(18)}: $v" }.join("\n")
 log.info "-\033[2m--------------------------------------------------\033[0m-"
-
-// Check the hostnames against configured profiles
-checkHostname()
-
-Channel.from(summary.collect{ [it.key, it.value] })
-    .map { k,v -> "<dt>$k</dt><dd><samp>${v ?: '<span style=\"color:#999999;\">N/A</a>'}</samp></dd>" }
-    .reduce { a, b -> return [a, b].join("\n            ") }
-    .map { x -> """
-    id: 'nf-core-siteqc-summary'
-    description: " - this information is collected when the pipeline is started."
-    section_name: 'nf-core/siteqc Workflow Summary'
-    section_href: 'https://github.com/nf-core/siteqc'
-    plot_type: 'html'
-    data: |
-        <dl class=\"dl-horizontal\">
-            $x
-        </dl>
-    """.stripIndent() }
-    .set { ch_workflow_summary }
 
 /*
  * Parse software version numbers
@@ -200,195 +125,977 @@ process get_software_versions {
 }
 
 /*
- * STEP 1 - FastQC
+ * STEP - start_file:  Create a backbone of IDs for other data to be joined to
  */
-process fastqc {
-    tag "$name"
-    label 'process_medium'
-    publishDir "${params.outdir}/fastqc", mode: params.publish_dir_mode,
-        saveAs: { filename ->
-                      filename.indexOf(".zip") > 0 ? "zips/$filename" : "$filename"
-                }
+// TODO redefine logic of "if "$sexChrom", capture substring from basename?
+process start_file {
+    publishDir "${params.outdir}/startfile/", mode: params.publish_dir_mode,
 
     input:
-    set val(name), file(reads) from ch_read_files_fastqc
+    tuple val(sexChrom)file sample_bcf from ch_files_bcf
+    file infile
+    val resources
+    val sexChrom
 
     output:
-    file "*_fastqc.{zip,html}" into ch_fastqc_results
+    file "start_file_*" into ch_template_startfiles
+
+    script:
+    query_text = '%CHROM %POS %REF %ALT %INFO/OLD_CLUMPED-%INFO/OLD_MULTIALLELIC\n'
+    """
+    bcftools query \
+    -f '%CHROM %POS %REF %ALT %INFO/OLD_CLUMPED-%INFO/OLD_MULTIALLELIC\n' ${infile} --output start_file_${i}
+
+    if "${sexChrom}"; then
+        #XY
+        bcftools query -f '%CHROM %POS %REF %ALT %INFO/OLD_CLUMPED-%INFO/OLD_MULTIALLELIC\n' ${infile} -S ${resources}${xy} --output start_file_${i}_XY
+        #XX
+        bcftools query -f '%CHROM %POS %REF %ALT %INFO/OLD_CLUMPED-%INFO/OLD_MULTIALLELIC\n' ${infile} -S ${resources}${xx} --output start_file_${i}_XX
+    else
+        #Autosomes
+        bcftools query -f '%CHROM %POS %REF %ALT %INFO/OLD_CLUMPED-%INFO/OLD_MULTIALLELIC\n' ${infile} --output start_file_${i}
+    fi
+    """
+}
+
+ /*
+ * STEP - missingness_1: Count fully missing GTs
+ */
+process missingness_1 {
+    publishDir "${params.outdir}/", mode: params.publish_dir_mode,
+
+    input:
+    file sample_bcf from ch_files_bcf
+
+    output:
+    file "*ids.txt" into ch_files_txt
+
+    script:
+
+    """
+    if "$sexChrom"; then
+        #XY
+        bcftools query $infile -f '%CHROM:%POS-%REF/%ALT-%INFO/OLD_CLUMPED-%INFO/OLD_MULTIALLELIC [%GT ] \n' -i 'GT="./." & FORMAT/DP=0'  -S ${resources}${xy} \
+        | awk 'BEGIN{FS=" "} {print $1" "NF-1}' > ${out}missing2/missing1_${i}_XY
+        #XX
+        bcftools query $infile -f '%CHROM:%POS-%REF/%ALT-%INFO/OLD_CLUMPED-%INFO/OLD_MULTIALLELIC [%GT ] \n' -i 'GT="./." & FORMAT/DP=0'  -S ${resources}${xx} \
+        | awk 'BEGIN{FS=" "} {print $1" "NF-1}' > ${out}missing2/missing1_${i}_XX
+    else
+        #autosomes
+        bcftools query $infile -f '%CHROM:%POS-%REF/%ALT-%INFO/OLD_CLUMPED-%INFO/OLD_MULTIALLELIC [%GT ] \n' -i 'GT="./." & FORMAT/DP=0' \
+        | awk 'BEGIN{FS=" "} {print $1" "NF-1}' > ${out}missing2/missing1_${i}
+    fi
+    """
+}
+
+ /*
+ * STEP - missingness_2: Count complete GTs only
+ */
+process missingness_2 {
+    publishDir "${params.outdir}/", mode: params.publish_dir_mode,
+
+    input:
+    file sample_bcf from ch_files_bcf
+
+    output:
+    file "*ids_counts.txt" into ch_files_txt
+
+    script
+    """
+    if "$sexChrom"; then
+        #XY
+        bcftools query $infile -f '%CHROM:%POS-%REF/%ALT-%INFO/OLD_CLUMPED-%INFO/OLD_MULTIALLELIC [%GT ] \n' -e 'GT~"\."' -S ${resources}${xy} \
+        | awk 'BEGIN{FS=" "} {print $1" "NF-1}' > ${out}missing2/missing2_${i}_XY
+        #XX
+        bcftools query $infile -f '%CHROM:%POS-%REF/%ALT-%INFO/OLD_CLUMPED-%INFO/OLD_MULTIALLELIC [%GT ] \n' -e 'GT~"\."' -S ${resources}${xx} \
+        | awk 'BEGIN{FS=" "} {print $1" "NF-1}' > ${out}missing2/missing2_${i}_XX
+    else
+        #Autosomes
+        bcftools query $infile -f '%CHROM:%POS-%REF/%ALT-%INFO/OLD_CLUMPED-%INFO/OLD_MULTIALLELIC [%GT ] \n' -e 'GT~"\."' \
+        | awk 'BEGIN{FS=" "} {print $1" "NF-1}' > ${out}missing2/missing2_${i}
+    fi
+    """
+}
+
+ /*
+ * STEP - complete_sites: Make sure the number of samples is listed in resources
+ */
+
+process complete_sites {
+    publishDir "${params.outdir}/", mode: params.publish_dir_mode,
+
+    input:
+    file sample_bcf from ch_files_bcf
+
+    output:
+    file "*N_samples.txt" into ch_files_txt
+
+    script:
+
+    """
+    if [ ! -f "${resources}/N_samples" ]; then
+        bsub -q short -P bio -e logs/n_samples_err%J -o logs/n_samples_out%J 'module load $bcftoolsLoad; bcftools query -l ${infile} | wc -l > ${resources}/N_samples'
+    fi
+    """
+}
+
+ /*
+ * STEP - median_coverage_all: Produce median value for depth across all GT
+ */
+
+process start_file {
+    publishDir "${params.outdir}/", mode: params.publish_dir_mode,
+
+    input:
+    file sample_bcf from ch_files_bcf
+
+    output:
+    file "*ids_median_depth.txt" into ch_files_txt
 
     script:
     """
-    fastqc --quiet --threads $task.cpus $reads
+    if "$sexChrom"; then
+        #XY
+        bcftools query -f '%CHROM:%POS-%REF/%ALT-%INFO/OLD_CLUMPED-%INFO/OLD_MULTIALLELIC [ %DP]\n' $infile -S ${resources}${xy} |\
+        awk '{sum=0; n=split($0,a)-1; for(i=2;i<=n;i++) sum+=a[i]; asort(a);
+                median=n%2?a[n/2+1]:(a[n/2]+a[n/2+1])/2;
+        print $1"\t"median}' > ${out}medianCoverageAll/medianCoverageAll${i}_XY
+        #XX
+        bcftools query -f '%CHROM:%POS-%REF/%ALT-%INFO/OLD_CLUMPED-%INFO/OLD_MULTIALLELIC [ %DP]\n' $infile -S ${resources}${xx} |\
+        awk '{sum=0; n=split($0,a)-1; for(i=2;i<=n;i++) sum+=a[i]; asort(a);
+                median=n%2?a[n/2+1]:(a[n/2]+a[n/2+1])/2;
+        print $1"\t"median}' > ${out}medianCoverageAll/medianCoverageAll${i}_XX
+    else
+        #autosomes
+        bcftools query -f '%CHROM:%POS-%REF/%ALT-%INFO/OLD_CLUMPED-%INFO/OLD_MULTIALLELIC [ %DP]\n' $infile |\
+        awk '{sum=0; n=split($0,a)-1; for(i=2;i<=n;i++) sum+=a[i]; asort(a);
+                median=n%2?a[n/2+1]:(a[n/2]+a[n/2+1])/2;
+        print $1"\t"median}' > ${out}medianCoverageAll/medianCoverageAll${i}
+    fi
+    """
+}
+
+ /*
+ * STEP - median_coverage_non_miss: Median coverage for fully present genotypes
+ */
+
+process median_coverage_non_miss {
+    publishDir "${params.outdir}/", mode: params.publish_dir_mode,
+
+    input:
+    file sample_bcf from ch_files_bcf
+
+    output:
+    file "*ids_median_depths.txt" into ch_files_txt
+
+    script:
+
+    """
+    if "$sexChrom"; then
+        #XY
+        bcftools query -f '%CHROM:%POS-%REF/%ALT-%INFO/OLD_CLUMPED-%INFO/OLD_MULTIALLELIC [ %DP]\n' -e 'GT~"\."' $infile -S ${resources}${xy} | \
+        awk '{sum=0; n=split($0,a)-1; for(i=2;i<=n;i++) sum+=a[i]; asort(a);
+            median=n%2?a[n/2+1]:(a[n/2]+a[n/2+1])/2;
+        print $1"\t"median}' > \
+        ${out}medianCoverageNonMiss/medianNonMiss_depth_${i}_XY
+        #XX
+        bcftools query -f '%CHROM:%POS-%REF/%ALT-%INFO/OLD_CLUMPED-%INFO/OLD_MULTIALLELIC [ %DP]\n' -e 'GT~"\."' $infile -S ${resources}${xx} | \
+        awk '{sum=0; n=split($0,a)-1; for(i=2;i<=n;i++) sum+=a[i]; asort(a);
+            median=n%2?a[n/2+1]:(a[n/2]+a[n/2+1])/2;
+        print $1"\t"median}' > \
+        ${out}medianCoverageNonMiss/medianNonMiss_depth_${i}_XX
+    else
+        #autosomes
+        bcftools query -f '%CHROM:%POS-%REF/%ALT-%INFO/OLD_CLUMPED-%INFO/OLD_MULTIALLELIC [ %DP]\n' -e 'GT~"\."' $infile | \
+        awk '{sum=0; n=split($0,a)-1; for(i=2;i<=n;i++) sum+=a[i]; asort(a);
+            median=n%2?a[n/2+1]:(a[n/2]+a[n/2+1])/2;
+        print $1"\t"median}' > \
+        ${out}medianCoverageNonMiss/medianNonMiss_depth_${i}
+    fi
+    """
+
+}
+ /*
+ * STEP - median_gq: Calculate median GQ
+ */
+process median_gq {
+    publishDir "${params.outdir}/", mode: params.publish_dir_mode,
+
+    input:
+    file sample_bcf from ch_files_bcf
+
+    output:
+    file "*ids_median_gq.txt" into ch_files_txt
+
+    script:
+
+    """
+    if "$sexChrom"; then
+        #XY
+        bcftools query -f '%CHROM:%POS-%REF/%ALT-%INFO/OLD_CLUMPED-%INFO/OLD_MULTIALLELIC [%GQ ] \n' -e 'GT~"\."' $infile -S ${resources}${xy} |\
+        awk '{sum=0; n=split($0,a)-1; for(i=2;i<=n;i++) sum+=a[i]; asort(a);
+                median=n%2?a[n/2+1]:(a[n/2]+a[n/2+1])/2; if(median > 99) {median=99};
+        print $1"\t"median}' > ${out}medianGQ/medianGQ_${i}_XY
+        #XX
+        bcftools query -f '%CHROM:%POS-%REF/%ALT-%INFO/OLD_CLUMPED-%INFO/OLD_MULTIALLELIC [%GQ ] \n' -e 'GT~"\."' $infile -S ${resources}${xx} |\
+        awk '{sum=0; n=split($0,a)-1; for(i=2;i<=n;i++) sum+=a[i]; asort(a);
+                median=n%2?a[n/2+1]:(a[n/2]+a[n/2+1])/2; if(median > 99) {median=99};
+        print $1"\t"median}' > ${out}medianGQ/medianGQ_${i}_XX
+    else
+        bcftools query -f '%CHROM:%POS-%REF/%ALT-%INFO/OLD_CLUMPED-%INFO/OLD_MULTIALLELIC [%GQ ] \n' -e 'GT~"\."' $infile |\
+        awk '{sum=0; n=split($0,a)-1; for(i=2;i<=n;i++) sum+=a[i]; asort(a);
+                median=n%2?a[n/2+1]:(a[n/2]+a[n/2+1])/2; if(median > 99) {median=99};
+        print $1"\t"median}' > ${out}medianGQ/medianGQ_${i}
+    fi    
+    """
+}
+ /*
+ * STEP - ab_ratio_p1: AB ratio calculation - number of hets passing binomial test (reads supporting het call)
+ */
+
+process ab_ratio_p1 {
+    publishDir "${params.outdir}/", mode: params.publish_dir_mode,
+
+    input:
+    file sample_bcf from ch_files_bcf
+
+    output:
+    file "*N_hets_passed.txt" into ch_files_txt
+
+    script:
+
+    """
+    if "$sexChrom"; then
+        #We only calculate AB ratio for XX
+        bcftools query -f '%CHROM:%POS-%REF/%ALT-%INFO/OLD_CLUMPED-%INFO/OLD_MULTIALLELIC [%AD ] \n'  -S ${resources}${xx} \
+        -i 'GT="het" & binom(FMT/AD) > 0.01' ${infile} | \
+        awk '{print $1"\t"NF -1}' > ${out}AB_hetPass/hetPass_${i}_XX
+    else
+        bcftools query -f '%CHROM:%POS-%REF/%ALT-%INFO/OLD_CLUMPED-%INFO/OLD_MULTIALLELIC [%AD ] \n' \
+        -i 'GT="het" & binom(FMT/AD) > 0.01' ${infile} | \
+        awk '{print $1"\t"NF -1}' > ${out}AB_hetPass/hetPass_${i}
+    fi
+    """
+}
+ /*
+ * STEP - ab_ratio_p2: Number of het GTs for p2 AB ratio
+ */
+ 
+process ab_ratio_p2 {
+    publishDir "${params.outdir}/", mode: params.publish_dir_mode,
+
+    input:
+    file sample_bcf from ch_files_bcf
+
+    output:
+    file "*ids_N_hets.txt" into ch_files_txt
+
+    script:
+    """
+    if "$sexChrom"; then
+        #We only calculate AB ratio for XX
+        bcftools query -f '%CHROM:%POS-%REF/%ALT-%INFO/OLD_CLUMPED-%INFO/OLD_MULTIALLELIC [%AD ] \n' -i 'GT="het"' ${infile} -S ${resources}${xx} | \
+        awk '{print $1"\t"NF-1}' > ${out}AB_hetAll/hetAll_${i}_XX
+    else
+        bcftools query -f '%CHROM:%POS-%REF/%ALT-%INFO/OLD_CLUMPED-%INFO/OLD_MULTIALLELIC [%AD ] \n' -i 'GT="het"' ${infile}  | \
+        awk '{print $1"\t"NF-1}' > ${out}AB_hetAll/hetAll_${i}
+    fi
+    """
+}
+
+ /*
+ * STEP - pull_ac: Pull AC from all files and store for addition to site metrics
+ */
+
+process pull_ac {
+    publishDir "${params.outdir}/", mode: params.publish_dir_mode,
+
+    input:
+    file sample_bcf from ch_files_bcf
+
+    output:
+    file "*ac.txt" into ch_files_txt
+
+    script:
+
+    """
+    bcftools query -f \
+    '%CHROM:%POS-%REF/%ALT-%INFO/OLD_CLUMPED-%INFO/OLD_MULTIALLELIC %INFO/AC \n' \
+    ${infile}  > ${out}AC_counts/${i}_AC
+    """
+}
+
+
+ /*
+ * STEP - pull_1kg_p3_sites: Pull sites from 1000KGP3
+ */
+
+process pull_1kg_p3_sites {
+    publishDir "${params.outdir}/", mode: params.publish_dir_mode,
+    
+    input:
+    file sample_bcf from ch_files_bcf
+    
+    output:
+    file "tmp_1kgp${i}.txt" into ..
+
+    script:
+
+    """
+    chr="${i%%_*}"
+    kgpin=$(ls -d "/public_data_resources/1000-genomes/20130502_GRCh38/"*.vcf.gz | \
+    grep ${chr}_ | grep -v genotypes )
+
+    zcat ${kgpin} | awk '/^##/ {next} { print $1"\t"$2"\t"$4"\t"$5}'  > tmp_1kgp${i}.txt
+    """
+}
+
+ /*
+ * STEP - mend_err_p1: Create a bed file for the mendel error calcs
+ */
+process mend_err_p1 {
+    publishDir "${params.outdir}/", mode: params.publish_dir_mode,
+
+    input:
+    file sample_bcf from ch_files_bcf
+
+    output:
+    file "*BED_trio_*" into ch_files_txt
+
+    script:
+    """
+    plink2 --bcf ${infile} \
+    --keep $triodata.keep \
+    --make-bed \
+    --vcf-half-call m \
+    --set-missing-var-ids @:#,\$r,\$a \
+    --new-id-max-allele-len 60 missing\
+    --double-id \
+    --real-ref-alleles \
+    --allow-extra-chr \
+    --out ${out}MendelErr/BED_trio_${i}
     """
 }
 
 /*
- * STEP 2 - MultiQC
+ * STEP - mend_err_p2: Calculate mendelian errors
  */
-process multiqc {
-    publishDir "${params.outdir}/MultiQC", mode: params.publish_dir_mode
+
+process mend_err_p2 {
+    publishDir "${params.outdir}/", mode: params.publish_dir_mode,
 
     input:
-    file (multiqc_config) from ch_multiqc_config
-    file (mqc_custom_config) from ch_multiqc_custom_config.collect().ifEmpty([])
-    // TODO nf-core: Add in log files from your new processes for MultiQC to find!
-    file ('fastqc/*') from ch_fastqc_results.collect().ifEmpty([])
-    file ('software_versions/*') from ch_software_versions_yaml.collect()
-    file workflow_summary from ch_workflow_summary.collectFile(name: "workflow_summary_mqc.yaml")
+    file predefined_fam from ch_files_gel
+    file bim from ch_files_bed
 
     output:
-    file "*multiqc_report.html" into ch_multiqc_report
-    file "*_data"
-    file "multiqc_plots"
+    file "*.lmendel" into
+    file "*.imendel" into
+    file "*.imendel" into
 
     script:
-    rtitle = custom_runName ? "--title \"$custom_runName\"" : ''
-    rfilename = custom_runName ? "--filename " + custom_runName.replaceAll('\\W','_').replaceAll('_+','_') + "_multiqc_report" : ''
-    custom_config_file = params.multiqc_config ? "--config $mqc_custom_config" : ''
-    // TODO nf-core: Specify which MultiQC modules to use with -m for a faster run time
+
     """
-    multiqc -f $rtitle $rfilename $custom_config_file .
+    plink --bed ${out}MendelErr/BED_trio_${i}.bed \
+    --bim ${out}MendelErr/BED_trio_${i}.bim \
+    --fam $triodata.fam \
+    --allow-extra-chr \
+    --allow-no-sex \
+    --mendel summaries-only \
+    --out ${out}MendelErr/MendErr_${i}
     """
 }
 
 /*
- * STEP 3 - Output Description HTML
+ * STEP - mend_dist: Summary stats and good families for Mendel errors
  */
-process output_documentation {
-    publishDir "${params.outdir}/pipeline_info", mode: params.publish_dir_mode
+process mend_dist {
+    publishDir "${params.outdir}/", mode: params.publish_dir_mode,
 
     input:
-    file output_docs from ch_output_docs
-    file images from ch_output_docs_images
+    file fmendel_file from ch_fmendel_files
 
     output:
-    file "results_description.html"
+    file "*summary_stats.txt" into ch_files_txt
 
     script:
+
     """
-    markdown_to_html.py $output_docs -o results_description.html
+    mendelerror_family_plotting.R ${out}MendelErr
     """
 }
 
 /*
- * Completion e-mail notification
+ * STEP - mend_err_p3: Calculate mendel errors on just good families
  */
-workflow.onComplete {
+process mend_err_p3 {
+    publishDir "${params.outdir}/", mode: params.publish_dir_mode,
 
-    // Set up the e-mail variables
-    def subject = "[nf-core/siteqc] Successful: $workflow.runName"
-    if (!workflow.success) {
-        subject = "[nf-core/siteqc] FAILED: $workflow.runName"
-    }
-    def email_fields = [:]
-    email_fields['version'] = workflow.manifest.version
-    email_fields['runName'] = custom_runName ?: workflow.runName
-    email_fields['success'] = workflow.success
-    email_fields['dateComplete'] = workflow.complete
-    email_fields['duration'] = workflow.duration
-    email_fields['exitStatus'] = workflow.exitStatus
-    email_fields['errorMessage'] = (workflow.errorMessage ?: 'None')
-    email_fields['errorReport'] = (workflow.errorReport ?: 'None')
-    email_fields['commandLine'] = workflow.commandLine
-    email_fields['projectDir'] = workflow.projectDir
-    email_fields['summary'] = summary
-    email_fields['summary']['Date Started'] = workflow.start
-    email_fields['summary']['Date Completed'] = workflow.complete
-    email_fields['summary']['Pipeline script file path'] = workflow.scriptFile
-    email_fields['summary']['Pipeline script hash ID'] = workflow.scriptId
-    if (workflow.repository) email_fields['summary']['Pipeline repository Git URL'] = workflow.repository
-    if (workflow.commitId) email_fields['summary']['Pipeline repository Git Commit'] = workflow.commitId
-    if (workflow.revision) email_fields['summary']['Pipeline Git branch/tag'] = workflow.revision
-    email_fields['summary']['Nextflow Version'] = workflow.nextflow.version
-    email_fields['summary']['Nextflow Build'] = workflow.nextflow.build
-    email_fields['summary']['Nextflow Compile Timestamp'] = workflow.nextflow.timestamp
+    input:
+    file bed from ch_files_bed
+    file fam from ch_files_fam
 
-    // TODO nf-core: If not using MultiQC, strip out this code (including params.max_multiqc_email_size)
-    // On success try attach the multiqc report
-    def mqc_report = null
-    try {
-        if (workflow.success) {
-            mqc_report = ch_multiqc_report.getVal()
-            if (mqc_report.getClass() == ArrayList) {
-                log.warn "[nf-core/siteqc] Found multiple reports from process 'multiqc', will use only one"
-                mqc_report = mqc_report[0]
-            }
-        }
-    } catch (all) {
-        log.warn "[nf-core/siteqc] Could not attach MultiQC report to summary email"
-    }
+    output:
+    file "*mendel_error_summaries.txt" into ch_files_txt
 
-    // Check if we are only sending emails on failure
-    email_address = params.email
-    if (!params.email && params.email_on_fail && !workflow.success) {
-        email_address = params.email_on_fail
-    }
+    script:
 
-    // Render the TXT template
-    def engine = new groovy.text.GStringTemplateEngine()
-    def tf = new File("$baseDir/assets/email_template.txt")
-    def txt_template = engine.createTemplate(tf).make(email_fields)
-    def email_txt = txt_template.toString()
-
-    // Render the HTML template
-    def hf = new File("$baseDir/assets/email_template.html")
-    def html_template = engine.createTemplate(hf).make(email_fields)
-    def email_html = html_template.toString()
-
-    // Render the sendmail template
-    def smail_fields = [ email: email_address, subject: subject, email_txt: email_txt, email_html: email_html, baseDir: "$baseDir", mqcFile: mqc_report, mqcMaxSize: params.max_multiqc_email_size.toBytes() ]
-    def sf = new File("$baseDir/assets/sendmail_template.txt")
-    def sendmail_template = engine.createTemplate(sf).make(smail_fields)
-    def sendmail_html = sendmail_template.toString()
-
-    // Send the HTML e-mail
-    if (email_address) {
-        try {
-            if (params.plaintext_email) { throw GroovyException('Send plaintext e-mail, not HTML') }
-            // Try to send HTML e-mail using sendmail
-            [ 'sendmail', '-t' ].execute() << sendmail_html
-            log.info "[nf-core/siteqc] Sent summary e-mail to $email_address (sendmail)"
-        } catch (all) {
-            // Catch failures and try with plaintext
-            def mail_cmd = [ 'mail', '-s', subject, '--content-type=text/html', email_address ]
-            if ( mqc_report.size() <= params.max_multiqc_email_size.toBytes() ) {
-              mail_cmd += [ '-A', mqc_report ]
-            }
-            mail_cmd.execute() << email_html
-            log.info "[nf-core/siteqc] Sent summary e-mail to $email_address (mail)"
-        }
-    }
-
-    // Write summary e-mail HTML to a file
-    def output_d = new File("${params.outdir}/pipeline_info/")
-    if (!output_d.exists()) {
-        output_d.mkdirs()
-    }
-    def output_hf = new File(output_d, "pipeline_report.html")
-    output_hf.withWriter { w -> w << email_html }
-    def output_tf = new File(output_d, "pipeline_report.txt")
-    output_tf.withWriter { w -> w << email_txt }
-
-    c_green = params.monochrome_logs ? '' : "\033[0;32m";
-    c_purple = params.monochrome_logs ? '' : "\033[0;35m";
-    c_red = params.monochrome_logs ? '' : "\033[0;31m";
-    c_reset = params.monochrome_logs ? '' : "\033[0m";
-
-    if (workflow.stats.ignoredCount > 0 && workflow.success) {
-        log.info "-${c_purple}Warning, pipeline completed, but with errored process(es) ${c_reset}-"
-        log.info "-${c_red}Number of ignored errored process(es) : ${workflow.stats.ignoredCount} ${c_reset}-"
-        log.info "-${c_green}Number of successfully ran process(es) : ${workflow.stats.succeedCount} ${c_reset}-"
-    }
-
-    if (workflow.success) {
-        log.info "-${c_purple}[nf-core/siteqc]${c_green} Pipeline completed successfully${c_reset}-"
-    } else {
-        checkHostname()
-        log.info "-${c_purple}[nf-core/siteqc]${c_red} Pipeline completed with errors${c_reset}-"
-    }
-
+    """
+    plink --bed ${out}MendelErr/BED_trio_${i}.bed \
+    --bim ${out}MendelErr/BED_trio_${i}.bim \
+    --fam $triodata.fam \
+    --allow-extra-chr \
+    --allow-no-sex \
+    --keep-fam ${out}MendelErr/MendelFamilies_4SD.fam \
+    --mendel summaries-only --out ${out}MendelErrSites/MendErr_${i}
+    """
 }
 
+// NOTE: (Daniel's note) Just before this step is where we want a checklist, that all chunks are completed
+
+ /*
+ * STEP - aggregate_annotation:  Annotate and make pass/fail. If king set to T in env, print subset of cols
+ */
+process aggregate_annotation {
+    publishDir "${params.outdir}/", mode: params.publish_dir_mode,
+
+    input:
+    file metrics from ch_files_metrics
+
+    output:
+    file "*annotated_variants.txt" into ch_files_txt
+
+    script:
+    """
+    annotatePerChunk.R \
+    ${i} \
+    ${out}startfile/start_file_${i} \
+    ${out}missing2/missing1_${i} \
+    ${out}missing2/missing2_${i} \
+    ${out}medianCoverageAll/medianCoverageAll${i} \
+    ${out}medianCoverageNonMiss/medianNonMiss_depth_${i} \
+    ${out}medianGQ/medianGQ_${i} \
+    ${out}AB_hetAll/hetAll_${i} \
+    ${out}AB_hetPass/hetPass_${i} \
+    ${out}MendelErrSites/MendErr_${i}.lmendel \
+    ${out}Annotation_newtest \
+    ${resources}/N_samples \
+    ${out}AC_counts/${i}_AC \
+    tmp_1kgp${i}.txt
+    """
+}
+ 
+ /*
+ * STEP - sort_compress: Sort and compress site metric data for KING step
+ */
+process sort_compress {
+    publishDir "${params.outdir}/", mode: params.publish_dir_mode,
+
+    input:
+    file annotated_variants_txt from ch_files_annotated_variants
+
+    output:
+    set file ("*bgz", "*tbi") into ch_files_txt
+
+    script:
+
+    """
+    sort -k2 -n ${out}Annotation_newtest/BCFtools_site_metrics_SUBCOLS${i}.txt > \
+    ${out}Annotation_newtest/BCFtools_site_metrics_SUBCOLS${i}_sorted.txt
+    bgzip -f ${out}Annotation_newtest/BCFtools_site_metrics_SUBCOLS${i}_sorted.txt && \
+    tabix -s1 -b2 -e2 ${out}Annotation_newtest/BCFtools_site_metrics_SUBCOLS${i}_sorted.txt.gz
+    #rm ${out}Annotation/BCFtools_site_metrics_SUBCOLS${i}_sorted.txt &&
+    #rm tmp_1kgp${i}.txt
+    """
+}
+
+//  KING WORKFLOW
+
+/*
+ * STEP - filter_regions: Produce BCFs of our data filtered to sites pass sites
+ */
+process filter_regions {
+    publishDir "${params.outdir}/", mode: params.publish_dir_mode,
+
+    input:
+    file sample_bcf from ch_files_bcf
+    file site metrics 
+    file king_sites
+
+    output:
+    file "*ids.txt" into ch_files_txt
+
+    script:
+    """
+    bcftools view ${infile} \
+    -T ${out}Annotation_newtest/BCFtools_site_metrics_SUBCOLS${i}_sorted.txt.gz  \
+    -Ob \
+    -o ${out}AnnotatedVCFs/regionsFiltered/${i}_regionsFiltered.bcf
+    """
+}
+
+/*
+ * STEP - consensus_and_maf_filter: Second stage filtering to give biallelic SNPs intersected with 1000KGP3 with MAF > 0.01
+ * STEP - further_filtering:        Second stage filtering to give biallelic SNPs intersected with 1000KGP3 with MAF > 0.01
+ */
+process further_filtering {
+    publishDir "${params.outdir}/", mode: params.publish_dir_mode,
+
+    input:
+    file sample_bcf from ch_files_bcf
+
+    output:
+    file "*positions.txt" into ch_files_txt
+    file "*bcf" into ch_files_bcf
+
+    script:
+    """
+    bcftools view ${out}AnnotatedVCFs/regionsFiltered/${i}_regionsFiltered.bcf \
+    -i 'INFO/OLD_MULTIALLELIC="." & INFO/OLD_CLUMPED="."' \
+    -T ^${resources}/MichiganLD_liftover_exclude_regions.txt \
+    -v snps  | \
+    bcftools annotate \
+    --set-id '%CHROM:%POS-%REF/%ALT-%INFO/OLD_CLUMPED-%INFO/OLD_MULTIALLELIC' | \
+    bcftools +fill-tags -Ob \
+    -o ${out}AnnotatedVCFs/regionsFiltered/MichiganLD_regionsFiltered_${i}.bcf \
+    -- -t MAF
+    #Produce filtered txt file
+    bcftools query ${out}AnnotatedVCFs/regionsFiltered/MichiganLD_regionsFiltered_${i}.bcf \
+    -i 'MAF[0]>0.01' -f '%CHROM\t%POS\t%REF\t%ALT\t%MAF\n' | \
+    awk -F "\t" '{ if(($3 == "G" && $4 == "C") || ($3 == "A" && $4 == "T")) {next} { print $0} }' \
+    > ${out}AnnotatedVCFs/MAF_filtered_1kp3intersect_${i}.txt
+    """
+}
+
+/*
+ * STEP - create_final_king_vcf: Produce new BCF just with filtered sites
+ */
+process create_final_king_vcf {
+    publishDir "${params.outdir}/", mode: params.publish_dir_mode,
+
+    input:
+    file agg_samples_txt from ..
+    file filtered_regions_bcf from ..
+    file intersected_sites_txt from ..
+    
+    output:
+    file "*vcf.gz*" into ch_files_vcf
+
+    script:
+    """
+    #Now filter down our file to just samples we want in our GRM. This removes any withdrawals that we learned of during the process of aggregation
+    #Store the header
+    bcftools view \
+    -S ${resources}78389_final_platekeys_agg_v9.txt \
+    --force-samples \
+    -h ${out}AnnotatedVCFs/regionsFiltered/MichiganLD_regionsFiltered_${i}.bcf \
+    > ${out}KING/${i}_filtered.vcf
+    
+    #Then match against all variant cols in our subsetted bcf to our maf filtered, intersected sites and only print those that are in the variant file.
+    #Then append this to the stored header, SNPRelate needs vcfs so leave as is
+    bcftools view \
+    -H ${out}AnnotatedVCFs/regionsFiltered/MichiganLD_regionsFiltered_${i}.bcf \
+    -S ${resources}78389_final_platekeys_agg_v9.txt \
+    --force-samples \
+    | awk -F '\t' 'NR==FNR{c[$1$2$3$4]++;next}; c[$1$2$4$5] > 0' ${out}AnnotatedVCFs/MAF_filtered_1kp3intersect_${i}.txt - >> ${out}KING/${i}_filtered.vcf
+    bgzip ${out}KING/${i}_filtered.vcf
+    tabix ${out}KING/${i}_filtered.vcf.gz
+    """
+}
+
+/*
+ * STEP - concat_king_vcf: Concatenate compressed vcfs to per chromosome files
+ */
+process concat_king_vcf {
+    publishDir "${params.outdir}/", mode: params.publish_dir_mode,
+
+    input:
+    file vcf_gz from ch_vcfs
+
+    output:
+    file "chrom*_merged_filtered.vcf.gz" into ch_vcfs_per_chromosome
+
+    script:
+    """
+    find ${out}KING -type f -name "chr${i}_*.vcf.gz" > tmp.files_chrom${i}.txt
+    bcftools concat \
+    -f tmp.files_chrom${i}.txt \
+    -Oz \
+    -o ${out}perChrom_KING/chrom${i}_merged_filtered.vcf.gz && \
+    tabix ${out}perChrom_KING/chrom${i}_merged_filtered.vcf.gz && \
+    rm tmp.files_chrom${i}.txt
+    """
+}
+
+/*
+ * STEP - make_bed_all: Make BED files for 1000KGP3 intersected vcfs
+ */
+
+process make_bed_all {
+    publishDir "${params.outdir}/", mode: params.publish_dir_mode,
+
+    input:
+    file chr_merged_filt_vcf from ch_vcfs_per_chromosome
+
+    output:
+    file "*BED_*" into ch_files_beds
+
+    script:
+
+    """
+    bcftools view ${out}perChrom_KING/chrom${i}_merged_filtered.vcf.gz \
+    -Ov |\
+    plink --vcf /dev/stdin \
+    --vcf-half-call m \
+    --double-id \
+    --make-bed \
+    --real-ref-alleles \
+    --allow-extra-chr \
+    --out ${out}BEDref/BED_${i}
+    """
+}
+
+/*
+ * STEP - ld_bed: LD prune SNPs
+ */
+
+ process ld_bed {
+    publishDir "${params.outdir}/", mode: params.publish_dir_mode,
+
+    input:
+    tuple bed, bim, fam from ch_files_bed
+
+    output:
+    file "*bed_exluded_high_ld*" into ch_files_beds
+
+    script:
+    """
+    #Not considering founders in this as all of our SNPs are common
+    plink  \
+    --exclude range ${resources}/MichiganLD_liftover_exclude_regions_PARSED.txt \
+    --keep-allele-order \
+    --bfile ${out}BED/BED_${i} \
+    --indep-pairwise 500kb 1 0.1 \
+    --out ${out}BED/BED_LD_${i}
+    
+    #Now that we have our correct list of SNPs (prune.in), filter the original
+    #bed file to just these sites
+    plink \
+    --make-bed \
+    --bfile ${out}BED/BED_${i} \
+    --keep-allele-order \
+    --extract ${out}/BED/BED_LD_${i}.prune.in \
+    --double-id \
+    --allow-extra-chr \
+    --out ${out}BED/BED_LDpruned_${i}
+    """
+}
+
+/*
+ * STEP - merge_autosomes: Merge autosomes to genome wide BED files
+ */
+
+process merge_autosomes {
+    publishDir "${params.outdir}/", mode: params.publish_dir_mode,
+
+    input:
+    file chr_ld_pruned_bed from ch_files_beds.collect()
+
+    output:
+    file "*ids.txt" into ch_files_txt
+
+    script:
+    """
+    for i in {1..22}; do
+        echo ${out}BED/BED_LDpruned_$i >> mergelist.txt
+    done
+    plink --merge-list mergelist.txt \
+    --make-bed \
+    --out ${out}BED/autosomes_LD_pruned_1kgp3Intersect
+    rm mergelist.txt
+    """
+}
+
+/*
+ * STEP - hwe_pruning_30k_data: Produce a first pass HWE filter
+ * We use:
+ * The 195k SNPs from above
+ * The intersection bfiles (on all 80k)
+ * Then we make BED files of unrelated individuals for each superpop (using only unrelated samples from 30k)
+ * We do this using the inferred ancestries from the 30k
+ */
+
+// TODO: consider decoupling R scripts from plink scripts
+process hwe_pruning_30k_data {
+    publishDir "${params.outdir}/", mode: params.publish_dir_mode,
+
+    input:
+    file sample_bcf from ch_files_bcf
+
+    output:
+    file "*ids.txt" into ch_files_txt
+
+    script:
+    """
+    R -e 'library(data.table) 
+    library(dplyr) 
+    dat <- fread("aggV2_R9_M30K_1KGP3_ancestry_assignment_probs.tsv") %>% as_tibble();
+    unrels <- fread("/re_gecip/BRS/thanos/aggV2_bedmerge_30KSNPs_labkeyV9_08062020_update_PCsancestryrelated.tsv") %>% as_tibble() %>% filter(unrelated_set == 1);
+    dat <- dat %>% filter(plate_key %in% unrels$plate_key);
+    for(col in c("AFR","EUR","SAS","EAS")){dat[dat[col]>0.8,c("plate_key",col)] %>% write.table(paste0(col,"pop.txt"), quote = F, row.names=F, sep = "\t")}'
+
+    bedmain="${out}/BED/autosomes_LD_pruned_1kgp3Intersect"
+    for pop in AFR EUR SAS EAS; do
+        echo ${pop}
+        awk '{print $1"\t"$1}' ${pop}pop.txt > ${pop}keep
+        plink \
+        --keep ${pop}keep \
+        --make-bed \
+        --bfile ${bedmain} \
+        --out ${pop}
+        
+        plink --bfile ${pop} --hardy --out ${pop} --nonfounders
+    done
+
+    #Combine the HWE and produce a list of pass 
+    R -e 'library(data.table);
+    library(dplyr);
+    dat <- lapply(c("EUR.hwe","AFR.hwe", "SAS.hwe", "EAS.hwe"),fread);
+    names(dat) <- c("EUR.hwe","AFR.hwe", "SAS.hwe", "EAS.hwe");
+    dat <- dat %>% bind_rows(.id="id");
+    write.table(dat, "combinedHWE.txt", row.names = F, quote = F)'
+    R -e 'library(dplyr); library(data.table);
+        dat <- fread("combinedHWE.txt") %>% as_tibble()
+        #Create set that is just SNPS that are >10e-6 in all pops
+        dat %>% filter(P >10e-6) %>% group_by(SNP) %>% count() %>% filter(n==4) %>% select(SNP) %>% distinct() %>%
+        write.table("hwe10e-6_superpops_195ksnps", sep="\t", row.names = F, quote = F)
+        '
+    R -e 'library(dplyr); library(data.table);
+        dat <- fread("combinedHWE.txt") %>% as_tibble()
+        #Create set that is just SNPS that are >10e-2 in all pops
+        dat %>% filter(P >10e-2) %>% group_by(SNP) %>% count() %>% filter(n==4) %>% select(SNP) %>% distinct() %>%
+        write.table("hwe10e-2_superpops_195ksnps", sep="\t", row.names = F, quote = F)'
+    """
+}
+
+/*
+ * STEP - get_king_coeffs: 
+ */
+
+process get_king_coeffs {
+    publishDir "${params.outdir}/", mode: params.publish_dir_mode,
+
+    input:
+    file sample_bcf from ch_files_bcf
+
+    output:
+    file "*ids.txt" into ch_files_txt
+
+    script:
+
+    """
+    plink2 --bfile \
+    ${out}BED/autosomes_LD_pruned_1kgp3Intersect \
+    --make-king square \
+    --out \
+    ${out}KING/matrix/autosomes_LD_pruned_1kgp3Intersect \
+    --thread-num 30
+    """
+}
+
+/*
+ * STEP - get_king_coeffs_alt
+ * Daniel's notes:
+ * The main difference for this is that we are aiming to do all the pcAIR
+ * using other tools. Therefore the output needs to be different
+ */
+
+process get_king_coeffs_alt {
+    publishDir "${params.outdir}/", mode: params.publish_dir_mode,
+
+    input:
+    file sample_bcf from ch_files_bcf
+
+    output:
+    file "*ids.txt" into ch_files_txt
+
+    script:
+
+    """
+    plink2 --bfile \
+    ${out}BED/autosomes_LD_pruned_1kgp3Intersect \
+    --make-king triangle bin \
+    --out \
+    ${out}KING/matrix/autosomes_LD_pruned_1kgp3Intersect_triangle \
+    --thread-num 30
+    """
+}
+
+/*
+ * STEP - pcair_alternate: 
+ * Daniel's notes:
+ * This isn't actually intended to run as a function, it is just to stop stuff running
+ * when sourcing this file that we wrap it in a function
+ * Alternate approach to producing the PC-relate info
+ */
+
+process pcair_alternate {
+    publishDir "${params.outdir}/", mode: params.publish_dir_mode,
+
+    input:
+    file sample_bcf from ch_files_bcf
+
+    output:
+    file "*ids.txt" into ch_files_txt
+
+    script:
+
+    """
+    plink2 --bfile ${out}BED/autosomes_LD_pruned_1kgp3Intersect \
+       --king-cutoff ${out}KING/matrix/autosomes_LD_pruned_1kgp3Intersect_triangle 0.0442 && \
+       mv plink2.king.cutoff.in.id autosomes_LD_pruned_1kgp3Intersect.king.cutoff.in.id && \
+       mv plink2.king.cutoff.out.id autosomes_LD_pruned_1kgp3Intersect.king.cutoff.out.id
+
+
+    ##Partitions for the alternate triangles
+    plink2 --bfile ${out}BED/autosomes_LD_pruned_1kgp3Intersect \
+       --king-cutoff ${out}KING/matrix/autosomes_LD_pruned_1kgp3Intersect_triangle_HWE10_2 0.0442 && \
+       mv plink2.king.cutoff.in.id  autosomes_LD_pruned_1kgp3Intersect_triangle_HWE10_2.king.cutoff.in.id && \
+       mv plink2.king.cutoff.out.id  autosomes_LD_pruned_1kgp3Intersect_triangle_HWE10_2.king.cutoff.out.id
+    plink2 --bfile ${out}BED/autosomes_LD_pruned_1kgp3Intersect \
+       --king-cutoff ${out}KING/matrix/autosomes_LD_pruned_1kgp3Intersect_triangle_HWE10_6 0.0442 && \
+       mv plink2.king.cutoff.in.id  autosomes_LD_pruned_1kgp3Intersect_triangle_HWE10_6.king.cutoff.in.id && \
+       mv plink2.king.cutoff.out.id  autosomes_LD_pruned_1kgp3Intersect_triangle_HWE10_6.king.cutoff.out.id
+
+    #Let's now have a look at how muhc overlaps in the kinship based on the HWE cutoffs
+    R -e 'library(data.table); library(dplyr); library(magrittr);
+        dat <- fread("autosomes_LD_pruned_1kgp3Intersect.king.cutoff.in.id") %>% as_tibble();
+        hwe2 <- fread("autosomes_LD_pruned_1kgp3Intersect_triangle_HWE10_2.king.cutoff.in.id") %>% as_tibble();
+        hwe6 <- fread("autosomes_LD_pruned_1kgp3Intersect_triangle_HWE10_6.king.cutoff.in.id") %>% as_tibble();
+        dat <- bind_rows(dat, hwe2, hwe6, .id="id");
+        dat %>% group_by(id) %>% summarise(n()); 
+        dat %>% group_by(IID) %>% summarise(n=n()) %>% count(n)  '
+
+    #Filter the file
+    plink2 --bfile ${out}BED/autosomes_LD_pruned_1kgp3Intersect \
+    --make-bed \
+    --keep ${out}KING/matrix/plink2.king.cutoff.in.id \
+    --out ${out}KING/matrix/autosomes_LD_pruned_1kgp3Intersect_unrelated
+
+    #Also produce a related set
+    #Filter the file
+    plink2 --bfile ${out}BED/autosomes_LD_pruned_1kgp3Intersect \
+    --make-bed \
+    --remove ${out}KING/matrix/plink2.king.cutoff.in.id \
+    --out ${out}KING/matrix/autosomes_LD_pruned_1kgp3Intersect_related
+    """
+ }
+
+/*
+ * STEP - prep_hwe: Produce list of samples by super pop (probability > 0.8)
+ */
+
+process prep_hwe {
+    publishDir "${params.outdir}/", mode: params.publish_dir_mode,
+
+    input:
+    file sample_bcf from ch_files_bcf
+
+    output:
+    file "*ids.txt" into ch_files_txt
+
+    script:
+
+    """
+    tee prep_hwe.R <<EOF  
+    library(data.table)
+    library(dplyr)
+         dat <- fread("/re_gecip/shared_allGeCIPs/drhodes/Aggregation_79k/out_actual/Ancestries/aggV2_ancestry_assignment_probs_1KGP3_200K.tsv") %>% as_tibble()
+        for(col in c("AFR","EUR","SAS","EAS")){dat[dat[col]>0.8,c("Sample",col)] %>%
+        write.table(paste0('/re_gecip/shared_allGeCIPs/drhodes/Aggregation_79k/out_actual/Ancestries/',col,"pop.txt"), quote = F, row.names=F, sep = "\t")};
+    EOF
+    chmod +x prep_hwe.R
+    Rscript prep_hwe.R
+    #Produce an unrelated version of each of these lists too
+    for pop in AFR EUR SAS EAS; do
+        echo -e "Running ${pop}..."
+        awk 'NR==FNR{a[$2]; next} ($1) in a' ${out}KING/matrix/autosomes_LD_pruned_1kgp3Intersect_triangle_HWE10_6.king.cutoff.in.id ${out}/Ancestries/${pop}pop.txt > \
+        ${out}/Ancestries/${pop}_unrelated.txt
+        awk '{print $1"\t"$1}' ${out}/Ancestries/${pop}_unrelated.txt > ${out}/Ancestries/${pop}_unrelated.keep
+    done
+    wc -l ${out}/Ancestries/*_unrelated.txt
+    """
+}
+
+
+/*
+ * STEP - prep_hwe: Produce list of samples by super pop (probability > 0.8)
+ * NOTES:
+ * Taking the files produced in prep_hwe, run HWE on each subset of samples for each file.
+ * It would be faste rto parallelise across files too, but the super-pops apart from EUR shouldn't
+ * take too long
+ */
+
+process p_hwe {
+    publishDir "${params.outdir}/", mode: params.publish_dir_mode,
+
+    input:
+    file sample_bcf from ch_files_bcf
+
+    output:
+    file "*ids.txt" into ch_files_txt
+
+    script:
+
+    """
+    for pop in AFR EUR SAS EAS; do
+        echo -e "Calculating HWE on ${pop} samples..."
+        plink --bcf ${infile} \
+        --hardy midp \
+        --keep ${out}/Ancestries/${pop}_unrelated.keep \
+        --double-id \
+        --allow-extra-chr \
+        --out ${out}/HWE/${i}_$pop
+    done
+    """
+}
+
+/*
+ * STEP - end_aggregate_annotation: Annotate and make pass/fail. print subset of cols
+ * NOTES:
+ * Taking the files produced in prep_hwe, run HWE on each subset of samples for each file.
+ * It would be faste rto parallelise across files too, but the super-pops apart from EUR shouldn't
+ * take too long
+ */
+
+process end_aggregate_annotation {
+    publishDir "${params.outdir}/", mode: params.publish_dir_mode,
+
+    input:
+    file sample_bcf from ch_files_bcf
+
+    output:
+    file "annotated_variants.txt" into ch_files_txt
+
+    script:
+    """
+    annotatePerChunk.R \
+    ${i} \
+    ${out}startfile/start_file_${i} \
+    ${out}missing2/missing1_${i} \
+    ${out}missing2/missing2_${i} \
+    ${out}medianCoverageAll/medianCoverageAll${i} \
+    ${out}medianCoverageNonMiss/medianNonMiss_depth_${i} \
+    ${out}medianGQ/medianGQ_${i} \
+    ${out}AB_hetAll/hetAll_${i} \
+    ${out}AB_hetPass/hetPass_${i} \
+    ${out}MendelErrSites/MendErr_${i}.lmendel \
+    ${out}Annotation_final \
+    ${resources}/N_samples \
+    ${out}AC_counts/${i}_AC \
+    ignore #unused arg in this argument
+    """
+}
 
 def nfcoreHeader() {
     // Log colors ANSI codes
