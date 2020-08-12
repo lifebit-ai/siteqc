@@ -20,13 +20,25 @@ def helpMessage() {
     nextflow run  lifebit-ai/siteqc --input .. -profile docker
 
     Mandatory arguments:
-      --input [file]                  Path to input data (must be surrounded with quotes)
+      --input [file]                  Path to input sample sheet csv of bcf files.
+                                      The name of the files must be consistent across files.
+                                      see example:
+                                      test_all_chunks_merged_norm_chr10_53607810_55447336.bcf.gz
+                                      {name}_{CHR}_{START_POS}_{END_POS}.bcf.gz
+                                      Consistency is important here as a variable ('region')
+                                      is extracted from the filename.
+
       -profile [str]                  Configuration profile to use. Can use multiple (comma separated)
                                       Available: conda, docker, singularity, test, awsbatch, <institute> and more
 
     Options:
-      --genome [str]                  Name of iGenomes reference
-      --single_end [bool]             Specifies that the input is single-end reads
+      --query_format_start [str]      Bcftools query format used for creating the skeleton of the sites.
+      --query_format_miss1 [str]      Bcftools query format used for the missingeness 1 step.
+      --query_include_miss1 [str]
+
+
+      --xx_sample_ids [file]          Path to file that contains the XX sample ids. Must be single column, without a header.
+      --xy_sample_ids [file]          Path to file that contains the XY sample ids. Must be single column, without a header.
 
     References                        If not specified in the configuration file or you wish to overwrite any of the references
       --fasta [file]                  Path to fasta reference
@@ -74,6 +86,52 @@ if (workflow.profile.contains('awsbatch')) {
     if (params.tracedir.startsWith('s3:')) exit 1, "Specify a local tracedir or run without trace! S3 cannot be used for tracefiles."
 }
 
+// Define variables
+  query_format_start = params.query_format_start
+  query_format_miss1 = params.query_format_miss1
+  query_include_miss1 = params.query_include_miss1
+  query_format_miss2 = params.query_format_miss2
+  query_exclude_miss2 = params.query_exclude_miss2
+  query_format_med_cov_all = params.query_format_med_cov_all
+  awk_expr_med_cov_all = params.awk_expr_med_cov_all
+  query_format_med_cov_nonmisss = params.query_format_med_cov_nonmisss
+  query_exclude_med_cov_nonmiss =  params.query_exclude_med_cov_nonmiss
+  awk_expr_med_cov_nonmiss = params.awk_expr_med_cov_nonmiss
+  query_format_median_gq = params.query_format_median_gq
+  query_exclude_median_gq = params.query_exclude_median_gq
+  awk_expr_median_gq = params.awk_expr_median_gq
+  query_format_ab_ratio_p1 = params.query_format_ab_ratio_p1
+  query_include_ab_ratio_1 = params.query_include_ab_ratio_1
+  query_format_ab_ratio_p2 = params.query_format_ab_ratio_p2
+  query_include_ab_ratio_2 =  params.query_include_ab_ratio_2
+  query_format_pull_ac = params.query_format_pull_ac
+
+// Define channels based on params
+// Input list .csv file of tissues to analyse
+// [chr10_52955340_55447336, test_all_chunks_merged_norm_chr10_52955340_55447336.bcf.gz, test_all_chunks_merged_norm_chr10_52955340_55447336.bcf.gz.csi]
+if (params.input.endsWith(".csv")) {
+  Channel.fromPath(params.input)
+                        .ifEmpty { exit 1, "Input .csv list of input tissues not found at ${params.input}. Is the file path correct?" }
+                        .splitCsv(sep: ',',  skip: 1)
+                        .map { bcf, index -> ['chr'+file(bcf).simpleName.split('_chr').last() , file(bcf), file(index)] }
+                        .set { ch_bcfs }
+                        }
+
+(ch_bcfs_start_file, 
+ch_bcfs_miss1, 
+ch_bcfs_miss2, 
+ch_bcfs_complete_sites,
+ch_bcfs_med_cov_all,
+ch_bcfs_med_cov_non_miss,
+ch_bcfs_median_gq,
+ch_bcfs_ab_ratio_p1,
+ch_bcfs_ab_ratio_p2,
+ch_bcfs_pull_ac) = ch_bcfs.into(10)
+
+// List with sample ids to include/exclude
+ch_xy_sample_id_files = Channel.fromPath(params.xy_sample_ids)
+ch_xx_sample_id_files = Channel.fromPath(params.xx_sample_ids)
+
 // Header log info
 log.info nfcoreHeader()
 def summary = [:]
@@ -99,11 +157,12 @@ summary['Config Files'] = workflow.configFiles.join(', ')
 log.info summary.collect { k,v -> "${k.padRight(18)}: $v" }.join("\n")
 log.info "-\033[2m--------------------------------------------------\033[0m-"
 
+
 /*
  * Parse software version numbers
  */
 process get_software_versions {
-    publishDir "${params.outdir}/pipeline_info", mode: params.publish_dir_mode,
+    publishDir "${params.outdir}/pipeline_info", mode: params.publish_dir_mode
         saveAs: { filename ->
                       if (filename.indexOf(".csv") > 0) filename
                       else null
@@ -118,7 +177,6 @@ process get_software_versions {
     """
     echo $workflow.manifest.version > v_pipeline.txt
     echo $workflow.nextflow.version > v_nextflow.txt
-    fastqc --version > v_fastqc.txt
     multiqc --version > v_multiqc.txt
     scrape_software_versions.py &> software_versions_mqc.yaml
     """
@@ -128,236 +186,204 @@ process get_software_versions {
  * STEP - start_file:  Create a backbone of IDs for other data to be joined to
  */
 // TODO redefine logic of "if "$sexChrom", capture substring from basename?
+// #Sample lists for XX/XY QC
+//xx='xx_females_illumina_ploidy_samples_40740.tsv'
+//xy='xy_males_illumina_ploidy_samples_35924.tsv'
+// bcftools query -S, --samples-file <file>         file of samples to include
+// head results/startfiles/start_file_chr10_52955340_55447336 
+// chr10 52955340 A G
+// chr10 52955649 T C
 process start_file {
-    publishDir "${params.outdir}/startfile/", mode: params.publish_dir_mode,
+    publishDir "${params.outdir}/startfiles/", mode: params.publish_dir_mode
 
     input:
-    tuple val(sexChrom)file sample_bcf from ch_files_bcf
-    file infile
-    val resources
-    val sexChrom
+    set val(region), file(bcf), file(index) from ch_bcfs_start_file
+    each file(xy_sample_ids) from ch_xy_sample_id_files
+    each file(xx_sample_ids) from ch_xx_sample_id_files
 
     output:
     file "start_file_*" into ch_template_startfiles
+    // head results/startfiles/start_file_chr10_52955340_55447336 
+    // chr10 52955340 A G
+    // chr10 52955649 T C
 
     script:
-    query_text = '%CHROM %POS %REF %ALT %INFO/OLD_CLUMPED-%INFO/OLD_MULTIALLELIC\n'
     """
-    bcftools query \
-    -f '%CHROM %POS %REF %ALT %INFO/OLD_CLUMPED-%INFO/OLD_MULTIALLELIC\n' ${infile} --output start_file_${i}
-
-    if "${sexChrom}"; then
-        #XY
-        bcftools query -f '%CHROM %POS %REF %ALT %INFO/OLD_CLUMPED-%INFO/OLD_MULTIALLELIC\n' ${infile} -S ${resources}${xy} --output start_file_${i}_XY
-        #XX
-        bcftools query -f '%CHROM %POS %REF %ALT %INFO/OLD_CLUMPED-%INFO/OLD_MULTIALLELIC\n' ${infile} -S ${resources}${xx} --output start_file_${i}_XX
+    if [[ $region == *"chrX"* ]] || [[ $region == *"chrY"* ]] ; then
+      bcftools query -f '${query_format_start}' ${bcf} -o start_file_${region}_XY -S ${xy_sample_ids} 
+      bcftools query -f '${query_format_start}' ${bcf} -o start_file_${region}_XX -S ${xx_sample_ids}
     else
-        #Autosomes
-        bcftools query -f '%CHROM %POS %REF %ALT %INFO/OLD_CLUMPED-%INFO/OLD_MULTIALLELIC\n' ${infile} --output start_file_${i}
+      bcftools query -f '${query_format_start}' ${bcf} -o start_file_${region}
     fi
     """
-}
+  }
 
  /*
  * STEP - missingness_1: Count fully missing GTs
  */
 process missingness_1 {
-    publishDir "${params.outdir}/", mode: params.publish_dir_mode,
+    publishDir "${params.outdir}/missing2/", mode: params.publish_dir_mode
 
     input:
-    file sample_bcf from ch_files_bcf
+    set val(region), file(bcf), file(index) from ch_bcfs_miss1
+    each file(xy_sample_ids) from ch_xy_sample_id_files
+    each file(xx_sample_ids) from ch_xx_sample_id_files
 
     output:
-    file "*ids.txt" into ch_files_txt
+    file "missing1_*" into ch_files_miss1
 
     script:
-
     """
-    if "$sexChrom"; then
-        #XY
-        bcftools query $infile -f '%CHROM:%POS-%REF/%ALT-%INFO/OLD_CLUMPED-%INFO/OLD_MULTIALLELIC [%GT ] \n' -i 'GT="./." & FORMAT/DP=0'  -S ${resources}${xy} \
-        | awk 'BEGIN{FS=" "} {print $1" "NF-1}' > ${out}missing2/missing1_${i}_XY
-        #XX
-        bcftools query $infile -f '%CHROM:%POS-%REF/%ALT-%INFO/OLD_CLUMPED-%INFO/OLD_MULTIALLELIC [%GT ] \n' -i 'GT="./." & FORMAT/DP=0'  -S ${resources}${xx} \
-        | awk 'BEGIN{FS=" "} {print $1" "NF-1}' > ${out}missing2/missing1_${i}_XX
+    if [[ $region == *"chrX"* ]] || [[ $region == *"chrY"* ]] ; then
+        bcftools query ${bcf} -f '${query_format_miss1}' -i '${query_include_miss1}' -S ${xy_sample_ids} | awk 'BEGIN{FS=" "} {print $1" "NF-1}' > missing1_${region}_XY
+        bcftools query ${bcf} -f '${query_format_miss1}' -i '${query_include_miss1}' -S ${xy_sample_ids} | awk 'BEGIN{FS=" "} {print $1" "NF-1}' > missing1_${region}_XY
     else
-        #autosomes
-        bcftools query $infile -f '%CHROM:%POS-%REF/%ALT-%INFO/OLD_CLUMPED-%INFO/OLD_MULTIALLELIC [%GT ] \n' -i 'GT="./." & FORMAT/DP=0' \
-        | awk 'BEGIN{FS=" "} {print $1" "NF-1}' > ${out}missing2/missing1_${i}
+        bcftools query ${bcf} -f '${query_format_miss1}' -i '${query_include_miss1}' | awk 'BEGIN{FS=" "} {print $1" "NF-1}' > missing1_${region}
     fi
     """
-}
+ }
 
  /*
  * STEP - missingness_2: Count complete GTs only
  */
 process missingness_2 {
-    publishDir "${params.outdir}/", mode: params.publish_dir_mode,
+    publishDir "${params.outdir}/missing2/", mode: params.publish_dir_mode
 
     input:
-    file sample_bcf from ch_files_bcf
+    set val(region), file(bcf), file(index) from ch_bcfs_miss2
+    each file(xy_sample_ids) from ch_xy_sample_id_files
+    each file(xx_sample_ids) from ch_xx_sample_id_files
 
     output:
-    file "*ids_counts.txt" into ch_files_txt
+    file "missing2_*" into ch_files_txt
 
     script
+    params.query_exclude_miss2 = 'GT~"\."'
     """
-    if "$sexChrom"; then
-        #XY
-        bcftools query $infile -f '%CHROM:%POS-%REF/%ALT-%INFO/OLD_CLUMPED-%INFO/OLD_MULTIALLELIC [%GT ] \n' -e 'GT~"\."' -S ${resources}${xy} \
-        | awk 'BEGIN{FS=" "} {print $1" "NF-1}' > ${out}missing2/missing2_${i}_XY
-        #XX
-        bcftools query $infile -f '%CHROM:%POS-%REF/%ALT-%INFO/OLD_CLUMPED-%INFO/OLD_MULTIALLELIC [%GT ] \n' -e 'GT~"\."' -S ${resources}${xx} \
-        | awk 'BEGIN{FS=" "} {print $1" "NF-1}' > ${out}missing2/missing2_${i}_XX
+    if [[ $region == *"chrX"* ]] || [[ $region == *"chrY"* ]] ; then
+        bcftools query ${bcf} -f '${query_format_miss2}' -e '${query_exclude_miss2}' -S ${xy_sample_ids} | awk 'BEGIN{FS=" "} {print $1" "NF-1}' > missing2_${region}_XY
+        bcftools query ${bcf} -f '${query_format_miss2}' -e '${query_exclude_miss2}' -S ${xx_sample_ids} | awk 'BEGIN{FS=" "} {print $1" "NF-1}' > missing2_${region}_XX        
     else
-        #Autosomes
-        bcftools query $infile -f '%CHROM:%POS-%REF/%ALT-%INFO/OLD_CLUMPED-%INFO/OLD_MULTIALLELIC [%GT ] \n' -e 'GT~"\."' \
-        | awk 'BEGIN{FS=" "} {print $1" "NF-1}' > ${out}missing2/missing2_${i}
+        bcftools query ${bcf} -f '${query_format_miss2}' -e '${query_exclude_miss2}' | awk 'BEGIN{FS=" "} {print $1" "NF-1}' > missing2_${region}
     fi
     """
-}
+ }
 
  /*
  * STEP - complete_sites: Make sure the number of samples is listed in resources
  */
 
+// Suggestion: process count_samples {
+// TODO: Check with Daniel if the N count should be per bcf
 process complete_sites {
-    publishDir "${params.outdir}/", mode: params.publish_dir_mode,
+    publishDir "${params.outdir}/", mode: params.publish_dir_mode
 
     input:
-    file sample_bcf from ch_files_bcf
+    set val(region), file(bcf), file(index) from from ch_bcfs_complete_sites
 
     output:
-    file "*N_samples.txt" into ch_files_txt
+    set val(region), file("*N_samples.txt")minto ch_bcfs_
+    val(region), env(n_samples) into ch_n_samples
 
     script:
-
+    // if [ ! -f "${resources}/N_samples" ]; then
+    //     bsub -q short -P bio -e logs/n_samples_err%J -o logs/n_samples_out%J 
+    //   'module load ${bcf}toolsLoad; 
     """
-    if [ ! -f "${resources}/N_samples" ]; then
-        bsub -q short -P bio -e logs/n_samples_err%J -o logs/n_samples_out%J 'module load $bcftoolsLoad; bcftools query -l ${infile} | wc -l > ${resources}/N_samples'
-    fi
+    n_samples=`bcftools query -l ${bcf}) | wc -l`
+    bcftools query -l ${bcf} | wc -l > ${region}_N_samples.txt'
     """
-}
+ }
 
  /*
  * STEP - median_coverage_all: Produce median value for depth across all GT
  */
 
-process start_file {
-    publishDir "${params.outdir}/", mode: params.publish_dir_mode,
+process median_coverage_all {
+    publishDir "${params.outdir}/median_coverage_all/", mode: params.publish_dir_mode
 
     input:
-    file sample_bcf from ch_files_bcf
+    set val(region), file(bcf), file(index) from ch_bcfs_med_cov_all
+    each file(xy_sample_ids) from ch_xy_sample_id_files
+    each file(xx_sample_ids) from ch_xx_sample_id_files
 
     output:
-    file "*ids_median_depth.txt" into ch_files_txt
+    file "medianCoverageAll*" into ch_files_txt
 
     script:
     """
-    if "$sexChrom"; then
-        #XY
-        bcftools query -f '%CHROM:%POS-%REF/%ALT-%INFO/OLD_CLUMPED-%INFO/OLD_MULTIALLELIC [ %DP]\n' $infile -S ${resources}${xy} |\
-        awk '{sum=0; n=split($0,a)-1; for(i=2;i<=n;i++) sum+=a[i]; asort(a);
-                median=n%2?a[n/2+1]:(a[n/2]+a[n/2+1])/2;
-        print $1"\t"median}' > ${out}medianCoverageAll/medianCoverageAll${i}_XY
-        #XX
-        bcftools query -f '%CHROM:%POS-%REF/%ALT-%INFO/OLD_CLUMPED-%INFO/OLD_MULTIALLELIC [ %DP]\n' $infile -S ${resources}${xx} |\
-        awk '{sum=0; n=split($0,a)-1; for(i=2;i<=n;i++) sum+=a[i]; asort(a);
-                median=n%2?a[n/2+1]:(a[n/2]+a[n/2+1])/2;
-        print $1"\t"median}' > ${out}medianCoverageAll/medianCoverageAll${i}_XX
+    if [[ $region == *"chrX"* ]] || [[ $region == *"chrY"* ]] ; then
+        bcftools query ${bcf} -f '${query_format_med_cov_all}' -S ${xy_sample_ids} | awk ${awk_expr_med_cov_all} > medianCoverageAll${region}_XY
+        bcftools query ${bcf} -f '${query_format_med_cov_all}' -S ${xy_sample_ids} | awk ${awk_expr_med_cov_all} > medianCoverageAll${region}_XX 
     else
-        #autosomes
-        bcftools query -f '%CHROM:%POS-%REF/%ALT-%INFO/OLD_CLUMPED-%INFO/OLD_MULTIALLELIC [ %DP]\n' $infile |\
-        awk '{sum=0; n=split($0,a)-1; for(i=2;i<=n;i++) sum+=a[i]; asort(a);
-                median=n%2?a[n/2+1]:(a[n/2]+a[n/2+1])/2;
-        print $1"\t"median}' > ${out}medianCoverageAll/medianCoverageAll${i}
+        bcftools query ${bcf} -f '${query_format_med_cov_all}'| awk ${awk_expr_med_cov_all} > medianCoverageAll${region}
     fi
     """
-}
+ }
 
  /*
  * STEP - median_coverage_non_miss: Median coverage for fully present genotypes
  */
 
 process median_coverage_non_miss {
-    publishDir "${params.outdir}/", mode: params.publish_dir_mode,
+    publishDir "${params.outdir}/medianCoverageNonMiss/", mode: params.publish_dir_mode
 
     input:
-    file sample_bcf from ch_files_bcf
+    set val(region), file(bcf), file(index) from ch_bcfs_med_cov_non_miss
+    each file(xy_sample_ids) from ch_xy_sample_id_files
+    each file(xx_sample_ids) from ch_xx_sample_id_files
 
     output:
-    file "*ids_median_depths.txt" into ch_files_txt
+    file "medianNonMiss_depth_*" into ch_files_txt
 
     script:
 
     """
-    if "$sexChrom"; then
-        #XY
-        bcftools query -f '%CHROM:%POS-%REF/%ALT-%INFO/OLD_CLUMPED-%INFO/OLD_MULTIALLELIC [ %DP]\n' -e 'GT~"\."' $infile -S ${resources}${xy} | \
-        awk '{sum=0; n=split($0,a)-1; for(i=2;i<=n;i++) sum+=a[i]; asort(a);
-            median=n%2?a[n/2+1]:(a[n/2]+a[n/2+1])/2;
-        print $1"\t"median}' > \
-        ${out}medianCoverageNonMiss/medianNonMiss_depth_${i}_XY
-        #XX
-        bcftools query -f '%CHROM:%POS-%REF/%ALT-%INFO/OLD_CLUMPED-%INFO/OLD_MULTIALLELIC [ %DP]\n' -e 'GT~"\."' $infile -S ${resources}${xx} | \
-        awk '{sum=0; n=split($0,a)-1; for(i=2;i<=n;i++) sum+=a[i]; asort(a);
-            median=n%2?a[n/2+1]:(a[n/2]+a[n/2+1])/2;
-        print $1"\t"median}' > \
-        ${out}medianCoverageNonMiss/medianNonMiss_depth_${i}_XX
+    if [[ $region == *"chrX"* ]] || [[ $region == *"chrY"* ]] ; then
+        bcftools query ${bcf} -f '${query_format_med_cov_nonmisss}' -e '${query_exclude_med_cov_nonmiss}' -S ${xy_sample_ids} | awk ${awk_expr_med_cov_nonmiss} > medianNonMiss_depth_${region}_XY
+        bcftools query ${bcf} -f '${query_format_med_cov_nonmisss}' -e '${query_exclude_med_cov_nonmiss}' -S ${xx_sample_ids} | awk ${awk_expr_med_cov_nonmiss} > medianNonMiss_depth_${region}_XX
     else
-        #autosomes
-        bcftools query -f '%CHROM:%POS-%REF/%ALT-%INFO/OLD_CLUMPED-%INFO/OLD_MULTIALLELIC [ %DP]\n' -e 'GT~"\."' $infile | \
-        awk '{sum=0; n=split($0,a)-1; for(i=2;i<=n;i++) sum+=a[i]; asort(a);
-            median=n%2?a[n/2+1]:(a[n/2]+a[n/2+1])/2;
-        print $1"\t"median}' > \
-        ${out}medianCoverageNonMiss/medianNonMiss_depth_${i}
+        bcftools query ${bcf} -f '${query_format_med_cov_nonmisss}' -e '${query_exclude_med_cov_nonmiss}' | awk ${awk_expr_med_cov_nonmiss} > medianNonMiss_depth_${region}
     fi
     """
+ }
 
-}
  /*
  * STEP - median_gq: Calculate median GQ
  */
 process median_gq {
-    publishDir "${params.outdir}/", mode: params.publish_dir_mode,
+    publishDir "${params.outdir}/medianGQ", mode: params.publish_dir_mode
 
     input:
-    file sample_bcf from ch_files_bcf
+    set val(region), file(bcf), file(index) from ch_bcfs_median_gq
+    each file(xy_sample_ids) from ch_xy_sample_id_files
+    each file(xx_sample_ids) from ch_xx_sample_id_files
 
     output:
-    file "*ids_median_gq.txt" into ch_files_txt
+    file "medianGQ_*" into ch_files_txt
 
     script:
-
     """
-    if "$sexChrom"; then
-        #XY
-        bcftools query -f '%CHROM:%POS-%REF/%ALT-%INFO/OLD_CLUMPED-%INFO/OLD_MULTIALLELIC [%GQ ] \n' -e 'GT~"\."' $infile -S ${resources}${xy} |\
-        awk '{sum=0; n=split($0,a)-1; for(i=2;i<=n;i++) sum+=a[i]; asort(a);
-                median=n%2?a[n/2+1]:(a[n/2]+a[n/2+1])/2; if(median > 99) {median=99};
-        print $1"\t"median}' > ${out}medianGQ/medianGQ_${i}_XY
-        #XX
-        bcftools query -f '%CHROM:%POS-%REF/%ALT-%INFO/OLD_CLUMPED-%INFO/OLD_MULTIALLELIC [%GQ ] \n' -e 'GT~"\."' $infile -S ${resources}${xx} |\
-        awk '{sum=0; n=split($0,a)-1; for(i=2;i<=n;i++) sum+=a[i]; asort(a);
-                median=n%2?a[n/2+1]:(a[n/2]+a[n/2+1])/2; if(median > 99) {median=99};
-        print $1"\t"median}' > ${out}medianGQ/medianGQ_${i}_XX
+    if [[ $region == *"chrX"* ]] || [[ $region == *"chrY"* ]] ; then
+        bcftools query ${bcf} -f '${query_format_median_gq}' -e '${query_exclude_median_gq}' -S ${xy_sample_ids} | awk ${awk_expr_median_gq}  > medianGQ_${region}_XY
+        bcftools query ${bcf} -f '${query_format_median_gq}' -e '${query_exclude_median_gq}' -S ${xx_sample_ids} | awk ${awk_expr_median_gq}  > medianGQ_${region}_XX
     else
-        bcftools query -f '%CHROM:%POS-%REF/%ALT-%INFO/OLD_CLUMPED-%INFO/OLD_MULTIALLELIC [%GQ ] \n' -e 'GT~"\."' $infile |\
-        awk '{sum=0; n=split($0,a)-1; for(i=2;i<=n;i++) sum+=a[i]; asort(a);
-                median=n%2?a[n/2+1]:(a[n/2]+a[n/2+1])/2; if(median > 99) {median=99};
-        print $1"\t"median}' > ${out}medianGQ/medianGQ_${i}
+        bcftools query ${bcf} -f '${query_format_median_gq}' -e '${query_exclude_median_gq}' | awk ${awk_expr_median_gq}  > medianGQ_${region}
     fi    
     """
-}
+ }
+
  /*
  * STEP - ab_ratio_p1: AB ratio calculation - number of hets passing binomial test (reads supporting het call)
  */
 
 process ab_ratio_p1 {
-    publishDir "${params.outdir}/", mode: params.publish_dir_mode,
+    publishDir "${params.outdir}/AB_hetPass/", mode: params.publish_dir_mode
 
     input:
-    file sample_bcf from ch_files_bcf
+    set val(region), file(bcf), file(index) from ch_bcfs_ab_ratio_p1
+    each file(xy_sample_ids) from ch_xy_sample_id_files
+    each file(xx_sample_ids) from ch_xx_sample_id_files
 
     output:
     file "*N_hets_passed.txt" into ch_files_txt
@@ -365,737 +391,732 @@ process ab_ratio_p1 {
     script:
 
     """
-    if "$sexChrom"; then
-        #We only calculate AB ratio for XX
-        bcftools query -f '%CHROM:%POS-%REF/%ALT-%INFO/OLD_CLUMPED-%INFO/OLD_MULTIALLELIC [%AD ] \n'  -S ${resources}${xx} \
-        -i 'GT="het" & binom(FMT/AD) > 0.01' ${infile} | \
-        awk '{print $1"\t"NF -1}' > ${out}AB_hetPass/hetPass_${i}_XX
+    #We only calculate AB ratio for XX
+    if [[ $region == *"chrX"* ]] || [[ $region == *"chrY"* ]] ; then
+        bcftools query ${bcf} -f '${query_format_ab_ratio_p1}' -S ${xx_sample_ids} -i ${query_include_ab_ratio_1} | awk '{print $1"\t"NF -1}' > hetPass_${region}_XX
     else
-        bcftools query -f '%CHROM:%POS-%REF/%ALT-%INFO/OLD_CLUMPED-%INFO/OLD_MULTIALLELIC [%AD ] \n' \
-        -i 'GT="het" & binom(FMT/AD) > 0.01' ${infile} | \
-        awk '{print $1"\t"NF -1}' > ${out}AB_hetPass/hetPass_${i}
+        bcftools query ${bcf} -f '${query_format_ab_ratio_p1}' -i ${query_include_ab_ratio_1} | awk '{print $1"\t"NF -1}' > hetPass_${region}
     fi
     """
-}
+ }
+
  /*
  * STEP - ab_ratio_p2: Number of het GTs for p2 AB ratio
  */
  
 process ab_ratio_p2 {
-    publishDir "${params.outdir}/", mode: params.publish_dir_mode,
+    publishDir "${params.outdir}/AB_hetAll", mode: params.publish_dir_mode
 
     input:
-    file sample_bcf from ch_files_bcf
+    set val(region), file(bcf), file(index) from ch_bcfs_ab_ratio_p2
+    each file(xy_sample_ids) from ch_xy_sample_id_files
+    each file(xx_sample_ids) from ch_xx_sample_id_files
 
     output:
-    file "*ids_N_hets.txt" into ch_files_txt
+    file "hetAll_*" into ch_files_txt
 
     script:
     """
-    if "$sexChrom"; then
-        #We only calculate AB ratio for XX
-        bcftools query -f '%CHROM:%POS-%REF/%ALT-%INFO/OLD_CLUMPED-%INFO/OLD_MULTIALLELIC [%AD ] \n' -i 'GT="het"' ${infile} -S ${resources}${xx} | \
-        awk '{print $1"\t"NF-1}' > ${out}AB_hetAll/hetAll_${i}_XX
+    # We only calculate AB ratio for XX
+    if [[ $region == *"chrX"* ]] || [[ $region == *"chrY"* ]] ; then
+        bcftools query ${bcf} -f '${query_format_ab_ratio_p2}' -S ${xx_sample_ids} -i ${query_include_ab_ratio_2}  'GT="het"'| awk '{print $1"\t"NF -1}' > hetAll_${region}_XX
     else
-        bcftools query -f '%CHROM:%POS-%REF/%ALT-%INFO/OLD_CLUMPED-%INFO/OLD_MULTIALLELIC [%AD ] \n' -i 'GT="het"' ${infile}  | \
-        awk '{print $1"\t"NF-1}' > ${out}AB_hetAll/hetAll_${i}
+        bcftools query ${bcf} -f '${query_format_ab_ratio_p2}' -i ${query_include_ab_ratio_2} | awk '{print $1"\t"NF -1}' > hetAll_${region}
     fi
     """
-}
+ }
 
  /*
  * STEP - pull_ac: Pull AC from all files and store for addition to site metrics
  */
-
+// TODO: What subfolder do we need to store the files in?
 process pull_ac {
-    publishDir "${params.outdir}/", mode: params.publish_dir_mode,
+    publishDir "${params.outdir}//", mode: params.publish_dir_mode
 
     input:
-    file sample_bcf from ch_files_bcf
-
-    output:
-    file "*ac.txt" into ch_files_txt
-
-    script:
-
-    """
-    bcftools query -f \
-    '%CHROM:%POS-%REF/%ALT-%INFO/OLD_CLUMPED-%INFO/OLD_MULTIALLELIC %INFO/AC \n' \
-    ${infile}  > ${out}AC_counts/${i}_AC
-    """
-}
-
-
- /*
- * STEP - pull_1kg_p3_sites: Pull sites from 1000KGP3
- */
-
-process pull_1kg_p3_sites {
-    publishDir "${params.outdir}/", mode: params.publish_dir_mode,
-    
-    input:
-    file sample_bcf from ch_files_bcf
+    set val(region), file(bcf), file(index) from ch_bcfs_pull_ac
     
     output:
-    file "tmp_1kgp${i}.txt" into ..
-
-    script:
-
-    """
-    chr="${i%%_*}"
-    kgpin=$(ls -d "/public_data_resources/1000-genomes/20130502_GRCh38/"*.vcf.gz | \
-    grep ${chr}_ | grep -v genotypes )
-
-    zcat ${kgpin} | awk '/^##/ {next} { print $1"\t"$2"\t"$4"\t"$5}'  > tmp_1kgp${i}.txt
-    """
-}
-
- /*
- * STEP - mend_err_p1: Create a bed file for the mendel error calcs
- */
-process mend_err_p1 {
-    publishDir "${params.outdir}/", mode: params.publish_dir_mode,
-
-    input:
-    file sample_bcf from ch_files_bcf
-
-    output:
-    file "*BED_trio_*" into ch_files_txt
+    file "*_AC" into ch_files_txt
 
     script:
     """
-    plink2 --bcf ${infile} \
-    --keep $triodata.keep \
-    --make-bed \
-    --vcf-half-call m \
-    --set-missing-var-ids @:#,\$r,\$a \
-    --new-id-max-allele-len 60 missing\
-    --double-id \
-    --real-ref-alleles \
-    --allow-extra-chr \
-    --out ${out}MendelErr/BED_trio_${i}
-    """
-}
-
-/*
- * STEP - mend_err_p2: Calculate mendelian errors
- */
-
-process mend_err_p2 {
-    publishDir "${params.outdir}/", mode: params.publish_dir_mode,
-
-    input:
-    file predefined_fam from ch_files_gel
-    file bim from ch_files_bed
-
-    output:
-    file "*.lmendel" into
-    file "*.imendel" into
-    file "*.imendel" into
-
-    script:
-
-    """
-    plink --bed ${out}MendelErr/BED_trio_${i}.bed \
-    --bim ${out}MendelErr/BED_trio_${i}.bim \
-    --fam $triodata.fam \
-    --allow-extra-chr \
-    --allow-no-sex \
-    --mendel summaries-only \
-    --out ${out}MendelErr/MendErr_${i}
-    """
-}
-
-/*
- * STEP - mend_dist: Summary stats and good families for Mendel errors
- */
-process mend_dist {
-    publishDir "${params.outdir}/", mode: params.publish_dir_mode,
-
-    input:
-    file fmendel_file from ch_fmendel_files
-
-    output:
-    file "*summary_stats.txt" into ch_files_txt
-
-    script:
-
-    """
-    mendelerror_family_plotting.R ${out}MendelErr
-    """
-}
-
-/*
- * STEP - mend_err_p3: Calculate mendel errors on just good families
- */
-process mend_err_p3 {
-    publishDir "${params.outdir}/", mode: params.publish_dir_mode,
-
-    input:
-    file bed from ch_files_bed
-    file fam from ch_files_fam
-
-    output:
-    file "*mendel_error_summaries.txt" into ch_files_txt
-
-    script:
-
-    """
-    plink --bed ${out}MendelErr/BED_trio_${i}.bed \
-    --bim ${out}MendelErr/BED_trio_${i}.bim \
-    --fam $triodata.fam \
-    --allow-extra-chr \
-    --allow-no-sex \
-    --keep-fam ${out}MendelErr/MendelFamilies_4SD.fam \
-    --mendel summaries-only --out ${out}MendelErrSites/MendErr_${i}
-    """
-}
-
-// NOTE: (Daniel's note) Just before this step is where we want a checklist, that all chunks are completed
-
- /*
- * STEP - aggregate_annotation:  Annotate and make pass/fail. If king set to T in env, print subset of cols
- */
-process aggregate_annotation {
-    publishDir "${params.outdir}/", mode: params.publish_dir_mode,
-
-    input:
-    file metrics from ch_files_metrics
-
-    output:
-    file "*annotated_variants.txt" into ch_files_txt
-
-    script:
-    """
-    annotatePerChunk.R \
-    ${i} \
-    ${out}startfile/start_file_${i} \
-    ${out}missing2/missing1_${i} \
-    ${out}missing2/missing2_${i} \
-    ${out}medianCoverageAll/medianCoverageAll${i} \
-    ${out}medianCoverageNonMiss/medianNonMiss_depth_${i} \
-    ${out}medianGQ/medianGQ_${i} \
-    ${out}AB_hetAll/hetAll_${i} \
-    ${out}AB_hetPass/hetPass_${i} \
-    ${out}MendelErrSites/MendErr_${i}.lmendel \
-    ${out}Annotation_newtest \
-    ${resources}/N_samples \
-    ${out}AC_counts/${i}_AC \
-    tmp_1kgp${i}.txt
-    """
-}
- 
- /*
- * STEP - sort_compress: Sort and compress site metric data for KING step
- */
-process sort_compress {
-    publishDir "${params.outdir}/", mode: params.publish_dir_mode,
-
-    input:
-    file annotated_variants_txt from ch_files_annotated_variants
-
-    output:
-    set file ("*bgz", "*tbi") into ch_files_txt
-
-    script:
-
-    """
-    sort -k2 -n ${out}Annotation_newtest/BCFtools_site_metrics_SUBCOLS${i}.txt > \
-    ${out}Annotation_newtest/BCFtools_site_metrics_SUBCOLS${i}_sorted.txt
-    bgzip -f ${out}Annotation_newtest/BCFtools_site_metrics_SUBCOLS${i}_sorted.txt && \
-    tabix -s1 -b2 -e2 ${out}Annotation_newtest/BCFtools_site_metrics_SUBCOLS${i}_sorted.txt.gz
-    #rm ${out}Annotation/BCFtools_site_metrics_SUBCOLS${i}_sorted.txt &&
-    #rm tmp_1kgp${i}.txt
-    """
-}
-
-//  KING WORKFLOW
-
-/*
- * STEP - filter_regions: Produce BCFs of our data filtered to sites pass sites
- */
-process filter_regions {
-    publishDir "${params.outdir}/", mode: params.publish_dir_mode,
-
-    input:
-    file sample_bcf from ch_files_bcf
-    file site metrics 
-    file king_sites
-
-    output:
-    file "*ids.txt" into ch_files_txt
-
-    script:
-    """
-    bcftools view ${infile} \
-    -T ${out}Annotation_newtest/BCFtools_site_metrics_SUBCOLS${i}_sorted.txt.gz  \
-    -Ob \
-    -o ${out}AnnotatedVCFs/regionsFiltered/${i}_regionsFiltered.bcf
-    """
-}
-
-/*
- * STEP - consensus_and_maf_filter: Second stage filtering to give biallelic SNPs intersected with 1000KGP3 with MAF > 0.01
- * STEP - further_filtering:        Second stage filtering to give biallelic SNPs intersected with 1000KGP3 with MAF > 0.01
- */
-process further_filtering {
-    publishDir "${params.outdir}/", mode: params.publish_dir_mode,
-
-    input:
-    file sample_bcf from ch_files_bcf
-
-    output:
-    file "*positions.txt" into ch_files_txt
-    file "*bcf" into ch_files_bcf
-
-    script:
-    """
-    bcftools view ${out}AnnotatedVCFs/regionsFiltered/${i}_regionsFiltered.bcf \
-    -i 'INFO/OLD_MULTIALLELIC="." & INFO/OLD_CLUMPED="."' \
-    -T ^${resources}/MichiganLD_liftover_exclude_regions.txt \
-    -v snps  | \
-    bcftools annotate \
-    --set-id '%CHROM:%POS-%REF/%ALT-%INFO/OLD_CLUMPED-%INFO/OLD_MULTIALLELIC' | \
-    bcftools +fill-tags -Ob \
-    -o ${out}AnnotatedVCFs/regionsFiltered/MichiganLD_regionsFiltered_${i}.bcf \
-    -- -t MAF
-    #Produce filtered txt file
-    bcftools query ${out}AnnotatedVCFs/regionsFiltered/MichiganLD_regionsFiltered_${i}.bcf \
-    -i 'MAF[0]>0.01' -f '%CHROM\t%POS\t%REF\t%ALT\t%MAF\n' | \
-    awk -F "\t" '{ if(($3 == "G" && $4 == "C") || ($3 == "A" && $4 == "T")) {next} { print $0} }' \
-    > ${out}AnnotatedVCFs/MAF_filtered_1kp3intersect_${i}.txt
-    """
-}
-
-/*
- * STEP - create_final_king_vcf: Produce new BCF just with filtered sites
- */
-process create_final_king_vcf {
-    publishDir "${params.outdir}/", mode: params.publish_dir_mode,
-
-    input:
-    file agg_samples_txt from ..
-    file filtered_regions_bcf from ..
-    file intersected_sites_txt from ..
-    
-    output:
-    file "*vcf.gz*" into ch_files_vcf
-
-    script:
-    """
-    #Now filter down our file to just samples we want in our GRM. This removes any withdrawals that we learned of during the process of aggregation
-    #Store the header
-    bcftools view \
-    -S ${resources}78389_final_platekeys_agg_v9.txt \
-    --force-samples \
-    -h ${out}AnnotatedVCFs/regionsFiltered/MichiganLD_regionsFiltered_${i}.bcf \
-    > ${out}KING/${i}_filtered.vcf
-    
-    #Then match against all variant cols in our subsetted bcf to our maf filtered, intersected sites and only print those that are in the variant file.
-    #Then append this to the stored header, SNPRelate needs vcfs so leave as is
-    bcftools view \
-    -H ${out}AnnotatedVCFs/regionsFiltered/MichiganLD_regionsFiltered_${i}.bcf \
-    -S ${resources}78389_final_platekeys_agg_v9.txt \
-    --force-samples \
-    | awk -F '\t' 'NR==FNR{c[$1$2$3$4]++;next}; c[$1$2$4$5] > 0' ${out}AnnotatedVCFs/MAF_filtered_1kp3intersect_${i}.txt - >> ${out}KING/${i}_filtered.vcf
-    bgzip ${out}KING/${i}_filtered.vcf
-    tabix ${out}KING/${i}_filtered.vcf.gz
-    """
-}
-
-/*
- * STEP - concat_king_vcf: Concatenate compressed vcfs to per chromosome files
- */
-process concat_king_vcf {
-    publishDir "${params.outdir}/", mode: params.publish_dir_mode,
-
-    input:
-    file vcf_gz from ch_vcfs
-
-    output:
-    file "chrom*_merged_filtered.vcf.gz" into ch_vcfs_per_chromosome
-
-    script:
-    """
-    find ${out}KING -type f -name "chr${i}_*.vcf.gz" > tmp.files_chrom${i}.txt
-    bcftools concat \
-    -f tmp.files_chrom${i}.txt \
-    -Oz \
-    -o ${out}perChrom_KING/chrom${i}_merged_filtered.vcf.gz && \
-    tabix ${out}perChrom_KING/chrom${i}_merged_filtered.vcf.gz && \
-    rm tmp.files_chrom${i}.txt
-    """
-}
-
-/*
- * STEP - make_bed_all: Make BED files for 1000KGP3 intersected vcfs
- */
-
-process make_bed_all {
-    publishDir "${params.outdir}/", mode: params.publish_dir_mode,
-
-    input:
-    file chr_merged_filt_vcf from ch_vcfs_per_chromosome
-
-    output:
-    file "*BED_*" into ch_files_beds
-
-    script:
-
-    """
-    bcftools view ${out}perChrom_KING/chrom${i}_merged_filtered.vcf.gz \
-    -Ov |\
-    plink --vcf /dev/stdin \
-    --vcf-half-call m \
-    --double-id \
-    --make-bed \
-    --real-ref-alleles \
-    --allow-extra-chr \
-    --out ${out}BEDref/BED_${i}
-    """
-}
-
-/*
- * STEP - ld_bed: LD prune SNPs
- */
-
- process ld_bed {
-    publishDir "${params.outdir}/", mode: params.publish_dir_mode,
-
-    input:
-    tuple bed, bim, fam from ch_files_bed
-
-    output:
-    file "*bed_exluded_high_ld*" into ch_files_beds
-
-    script:
-    """
-    #Not considering founders in this as all of our SNPs are common
-    plink  \
-    --exclude range ${resources}/MichiganLD_liftover_exclude_regions_PARSED.txt \
-    --keep-allele-order \
-    --bfile ${out}BED/BED_${i} \
-    --indep-pairwise 500kb 1 0.1 \
-    --out ${out}BED/BED_LD_${i}
-    
-    #Now that we have our correct list of SNPs (prune.in), filter the original
-    #bed file to just these sites
-    plink \
-    --make-bed \
-    --bfile ${out}BED/BED_${i} \
-    --keep-allele-order \
-    --extract ${out}/BED/BED_LD_${i}.prune.in \
-    --double-id \
-    --allow-extra-chr \
-    --out ${out}BED/BED_LDpruned_${i}
-    """
-}
-
-/*
- * STEP - merge_autosomes: Merge autosomes to genome wide BED files
- */
-
-process merge_autosomes {
-    publishDir "${params.outdir}/", mode: params.publish_dir_mode,
-
-    input:
-    file chr_ld_pruned_bed from ch_files_beds.collect()
-
-    output:
-    file "*ids.txt" into ch_files_txt
-
-    script:
-    """
-    for i in {1..22}; do
-        echo ${out}BED/BED_LDpruned_$i >> mergelist.txt
-    done
-    plink --merge-list mergelist.txt \
-    --make-bed \
-    --out ${out}BED/autosomes_LD_pruned_1kgp3Intersect
-    rm mergelist.txt
-    """
-}
-
-/*
- * STEP - hwe_pruning_30k_data: Produce a first pass HWE filter
- * We use:
- * The 195k SNPs from above
- * The intersection bfiles (on all 80k)
- * Then we make BED files of unrelated individuals for each superpop (using only unrelated samples from 30k)
- * We do this using the inferred ancestries from the 30k
- */
-
-// TODO: consider decoupling R scripts from plink scripts
-process hwe_pruning_30k_data {
-    publishDir "${params.outdir}/", mode: params.publish_dir_mode,
-
-    input:
-    file sample_bcf from ch_files_bcf
-
-    output:
-    file "*ids.txt" into ch_files_txt
-
-    script:
-    """
-    R -e 'library(data.table) 
-    library(dplyr) 
-    dat <- fread("aggV2_R9_M30K_1KGP3_ancestry_assignment_probs.tsv") %>% as_tibble();
-    unrels <- fread("/re_gecip/BRS/thanos/aggV2_bedmerge_30KSNPs_labkeyV9_08062020_update_PCsancestryrelated.tsv") %>% as_tibble() %>% filter(unrelated_set == 1);
-    dat <- dat %>% filter(plate_key %in% unrels$plate_key);
-    for(col in c("AFR","EUR","SAS","EAS")){dat[dat[col]>0.8,c("plate_key",col)] %>% write.table(paste0(col,"pop.txt"), quote = F, row.names=F, sep = "\t")}'
-
-    bedmain="${out}/BED/autosomes_LD_pruned_1kgp3Intersect"
-    for pop in AFR EUR SAS EAS; do
-        echo ${pop}
-        awk '{print $1"\t"$1}' ${pop}pop.txt > ${pop}keep
-        plink \
-        --keep ${pop}keep \
-        --make-bed \
-        --bfile ${bedmain} \
-        --out ${pop}
-        
-        plink --bfile ${pop} --hardy --out ${pop} --nonfounders
-    done
-
-    #Combine the HWE and produce a list of pass 
-    R -e 'library(data.table);
-    library(dplyr);
-    dat <- lapply(c("EUR.hwe","AFR.hwe", "SAS.hwe", "EAS.hwe"),fread);
-    names(dat) <- c("EUR.hwe","AFR.hwe", "SAS.hwe", "EAS.hwe");
-    dat <- dat %>% bind_rows(.id="id");
-    write.table(dat, "combinedHWE.txt", row.names = F, quote = F)'
-    R -e 'library(dplyr); library(data.table);
-        dat <- fread("combinedHWE.txt") %>% as_tibble()
-        #Create set that is just SNPS that are >10e-6 in all pops
-        dat %>% filter(P >10e-6) %>% group_by(SNP) %>% count() %>% filter(n==4) %>% select(SNP) %>% distinct() %>%
-        write.table("hwe10e-6_superpops_195ksnps", sep="\t", row.names = F, quote = F)
-        '
-    R -e 'library(dplyr); library(data.table);
-        dat <- fread("combinedHWE.txt") %>% as_tibble()
-        #Create set that is just SNPS that are >10e-2 in all pops
-        dat %>% filter(P >10e-2) %>% group_by(SNP) %>% count() %>% filter(n==4) %>% select(SNP) %>% distinct() %>%
-        write.table("hwe10e-2_superpops_195ksnps", sep="\t", row.names = F, quote = F)'
-    """
-}
-
-/*
- * STEP - get_king_coeffs: 
- */
-
-process get_king_coeffs {
-    publishDir "${params.outdir}/", mode: params.publish_dir_mode,
-
-    input:
-    file sample_bcf from ch_files_bcf
-
-    output:
-    file "*ids.txt" into ch_files_txt
-
-    script:
-
-    """
-    plink2 --bfile \
-    ${out}BED/autosomes_LD_pruned_1kgp3Intersect \
-    --make-king square \
-    --out \
-    ${out}KING/matrix/autosomes_LD_pruned_1kgp3Intersect \
-    --thread-num 30
-    """
-}
-
-/*
- * STEP - get_king_coeffs_alt
- * Daniel's notes:
- * The main difference for this is that we are aiming to do all the pcAIR
- * using other tools. Therefore the output needs to be different
- */
-
-process get_king_coeffs_alt {
-    publishDir "${params.outdir}/", mode: params.publish_dir_mode,
-
-    input:
-    file sample_bcf from ch_files_bcf
-
-    output:
-    file "*ids.txt" into ch_files_txt
-
-    script:
-
-    """
-    plink2 --bfile \
-    ${out}BED/autosomes_LD_pruned_1kgp3Intersect \
-    --make-king triangle bin \
-    --out \
-    ${out}KING/matrix/autosomes_LD_pruned_1kgp3Intersect_triangle \
-    --thread-num 30
-    """
-}
-
-/*
- * STEP - pcair_alternate: 
- * Daniel's notes:
- * This isn't actually intended to run as a function, it is just to stop stuff running
- * when sourcing this file that we wrap it in a function
- * Alternate approach to producing the PC-relate info
- */
-
-process pcair_alternate {
-    publishDir "${params.outdir}/", mode: params.publish_dir_mode,
-
-    input:
-    file sample_bcf from ch_files_bcf
-
-    output:
-    file "*ids.txt" into ch_files_txt
-
-    script:
-
-    """
-    plink2 --bfile ${out}BED/autosomes_LD_pruned_1kgp3Intersect \
-       --king-cutoff ${out}KING/matrix/autosomes_LD_pruned_1kgp3Intersect_triangle 0.0442 && \
-       mv plink2.king.cutoff.in.id autosomes_LD_pruned_1kgp3Intersect.king.cutoff.in.id && \
-       mv plink2.king.cutoff.out.id autosomes_LD_pruned_1kgp3Intersect.king.cutoff.out.id
-
-
-    ##Partitions for the alternate triangles
-    plink2 --bfile ${out}BED/autosomes_LD_pruned_1kgp3Intersect \
-       --king-cutoff ${out}KING/matrix/autosomes_LD_pruned_1kgp3Intersect_triangle_HWE10_2 0.0442 && \
-       mv plink2.king.cutoff.in.id  autosomes_LD_pruned_1kgp3Intersect_triangle_HWE10_2.king.cutoff.in.id && \
-       mv plink2.king.cutoff.out.id  autosomes_LD_pruned_1kgp3Intersect_triangle_HWE10_2.king.cutoff.out.id
-    plink2 --bfile ${out}BED/autosomes_LD_pruned_1kgp3Intersect \
-       --king-cutoff ${out}KING/matrix/autosomes_LD_pruned_1kgp3Intersect_triangle_HWE10_6 0.0442 && \
-       mv plink2.king.cutoff.in.id  autosomes_LD_pruned_1kgp3Intersect_triangle_HWE10_6.king.cutoff.in.id && \
-       mv plink2.king.cutoff.out.id  autosomes_LD_pruned_1kgp3Intersect_triangle_HWE10_6.king.cutoff.out.id
-
-    #Let's now have a look at how muhc overlaps in the kinship based on the HWE cutoffs
-    R -e 'library(data.table); library(dplyr); library(magrittr);
-        dat <- fread("autosomes_LD_pruned_1kgp3Intersect.king.cutoff.in.id") %>% as_tibble();
-        hwe2 <- fread("autosomes_LD_pruned_1kgp3Intersect_triangle_HWE10_2.king.cutoff.in.id") %>% as_tibble();
-        hwe6 <- fread("autosomes_LD_pruned_1kgp3Intersect_triangle_HWE10_6.king.cutoff.in.id") %>% as_tibble();
-        dat <- bind_rows(dat, hwe2, hwe6, .id="id");
-        dat %>% group_by(id) %>% summarise(n()); 
-        dat %>% group_by(IID) %>% summarise(n=n()) %>% count(n)  '
-
-    #Filter the file
-    plink2 --bfile ${out}BED/autosomes_LD_pruned_1kgp3Intersect \
-    --make-bed \
-    --keep ${out}KING/matrix/plink2.king.cutoff.in.id \
-    --out ${out}KING/matrix/autosomes_LD_pruned_1kgp3Intersect_unrelated
-
-    #Also produce a related set
-    #Filter the file
-    plink2 --bfile ${out}BED/autosomes_LD_pruned_1kgp3Intersect \
-    --make-bed \
-    --remove ${out}KING/matrix/plink2.king.cutoff.in.id \
-    --out ${out}KING/matrix/autosomes_LD_pruned_1kgp3Intersect_related
+    bcftools query ${bcf} -f '${query_format_pull_ac}' > ${region}_AC
     """
  }
 
-/*
- * STEP - prep_hwe: Produce list of samples by super pop (probability > 0.8)
- */
+//  /*
+//  * STEP - pull_1kg_p3_sites: Pull sites from 1000KGP3
+//  */
+// // TOCHECK: Ok to run once and provide as a resource?
+// process pull_1kg_p3_sites {
+//     publishDir "${params.outdir}/", mode: params.publish_dir_mode
+    
+//     input:
+//     file(1kg_vcfs_archive) from ch_1kg_vcfs_archive
+    
+//     output:
+//     file "tmp_1kgp${region}.txt" into ..
 
-process prep_hwe {
-    publishDir "${params.outdir}/", mode: params.publish_dir_mode,
+//     script:
 
-    input:
-    file sample_bcf from ch_files_bcf
+//     """
+//     mkdir 1kg_vfs
+//     tar xzvf ${1kg_vcfs_archive} -C 1kg_vfs
+//     chr="${region%%_*}"
+//     kgpin=$(ls -d "/public_data_resources/1000-genomes/20130502_GRCh38/"*.vcf.gz | \
+//     grep ${chr}_ | grep -v genotypes )
 
-    output:
-    file "*ids.txt" into ch_files_txt
+//     zcat ${kgpin} | awk '/^##/ {next} { print $1"\t"$2"\t"$4"\t"$5}'  > tmp_1kgp${i}.txt
+//     """
+// }
 
-    script:
+//  /*
+//  * STEP - mend_err_p1: Create a bed file for the mendel error calcs
+//  */
+// process mend_err_p1 {
+//     publishDir "${params.outdir}/", mode: params.publish_dir_mode
 
-    """
-    tee prep_hwe.R <<EOF  
-    library(data.table)
-    library(dplyr)
-         dat <- fread("/re_gecip/shared_allGeCIPs/drhodes/Aggregation_79k/out_actual/Ancestries/aggV2_ancestry_assignment_probs_1KGP3_200K.tsv") %>% as_tibble()
-        for(col in c("AFR","EUR","SAS","EAS")){dat[dat[col]>0.8,c("Sample",col)] %>%
-        write.table(paste0('/re_gecip/shared_allGeCIPs/drhodes/Aggregation_79k/out_actual/Ancestries/',col,"pop.txt"), quote = F, row.names=F, sep = "\t")};
-    EOF
-    chmod +x prep_hwe.R
-    Rscript prep_hwe.R
-    #Produce an unrelated version of each of these lists too
-    for pop in AFR EUR SAS EAS; do
-        echo -e "Running ${pop}..."
-        awk 'NR==FNR{a[$2]; next} ($1) in a' ${out}KING/matrix/autosomes_LD_pruned_1kgp3Intersect_triangle_HWE10_6.king.cutoff.in.id ${out}/Ancestries/${pop}pop.txt > \
-        ${out}/Ancestries/${pop}_unrelated.txt
-        awk '{print $1"\t"$1}' ${out}/Ancestries/${pop}_unrelated.txt > ${out}/Ancestries/${pop}_unrelated.keep
-    done
-    wc -l ${out}/Ancestries/*_unrelated.txt
-    """
-}
+//     input:
+//     file sample_bcf from ch_files_bcf
+
+//     output:
+//     file "*BED_trio_*" into ch_files_txt
+
+//     script:
+//     """
+//     plink2 --bcf ${bcf} \
+//     --keep $triodata.keep \
+//     --make-bed \
+//     --vcf-half-call m \
+//     --set-missing-var-ids @:#,\$r,\$a \
+//     --new-id-max-allele-len 60 missing\
+//     --double-id \
+//     --real-ref-alleles \
+//     --allow-extra-chr \
+//     --out ${out}MendelErr/BED_trio_${i}
+//     """
+// }
+
+// /*
+//  * STEP - mend_err_p2: Calculate mendelian errors
+//  */
+
+// process mend_err_p2 {
+//     publishDir "${params.outdir}/", mode: params.publish_dir_mode
+
+//     input:
+//     file predefined_fam from ch_files_gel
+//     file bim from ch_files_bed
+
+//     output:
+//     file "*.lmendel" into
+//     file "*.imendel" into
+//     file "*.imendel" into
+
+//     script:
+
+//     """
+//     plink --bed ${out}MendelErr/BED_trio_${i}.bed \
+//     --bim ${out}MendelErr/BED_trio_${i}.bim \
+//     --fam $triodata.fam \
+//     --allow-extra-chr \
+//     --allow-no-sex \
+//     --mendel summaries-only \
+//     --out ${out}MendelErr/MendErr_${i}
+//     """
+// }
+
+// /*
+//  * STEP - mend_dist: Summary stats and good families for Mendel errors
+//  */
+// process mend_dist {
+//     publishDir "${params.outdir}/", mode: params.publish_dir_mode
+
+//     input:
+//     file fmendel_file from ch_fmendel_files
+
+//     output:
+//     file "*summary_stats.txt" into ch_files_txt
+
+//     script:
+
+//     """
+//     mendelerror_family_plotting.R ${out}MendelErr
+//     """
+// }
+
+// /*
+//  * STEP - mend_err_p3: Calculate mendel errors on just good families
+//  */
+// process mend_err_p3 {
+//     publishDir "${params.outdir}/", mode: params.publish_dir_mode
+
+//     input:
+//     file bed from ch_files_bed
+//     file fam from ch_files_fam
+
+//     output:
+//     file "*mendel_error_summaries.txt" into ch_files_txt
+
+//     script:
+
+//     """
+//     plink --bed ${out}MendelErr/BED_trio_${i}.bed \
+//     --bim ${out}MendelErr/BED_trio_${i}.bim \
+//     --fam $triodata.fam \
+//     --allow-extra-chr \
+//     --allow-no-sex \
+//     --keep-fam ${out}MendelErr/MendelFamilies_4SD.fam \
+//     --mendel summaries-only --out ${out}MendelErrSites/MendErr_${i}
+//     """
+// }
+
+// // NOTE: (Daniel's note) Just before this step is where we want a checklist, that all chunks are completed
+
+//  /*
+//  * STEP - aggregate_annotation:  Annotate and make pass/fail. If king set to T in env, print subset of cols
+//  */
+// process aggregate_annotation {
+//     publishDir "${params.outdir}/", mode: params.publish_dir_mode
+
+//     input:
+//     file metrics from ch_files_metrics
+
+//     output:
+//     file "*annotated_variants.txt" into ch_files_txt
+
+//     script:
+//     """
+//     annotatePerChunk.R \
+//     ${i} \
+//     ${out}startfile/start_file_${i} \
+//     ${out}missing2/missing1_${i} \
+//     ${out}missing2/missing2_${i} \
+//     ${out}medianCoverageAll/medianCoverageAll${i} \
+//     ${out}medianCoverageNonMiss/medianNonMiss_depth_${i} \
+//     ${out}medianGQ/medianGQ_${i} \
+//     ${out}AB_hetAll/hetAll_${i} \
+//     ${out}AB_hetPass/hetPass_${i} \
+//     ${out}MendelErrSites/MendErr_${i}.lmendel \
+//     ${out}Annotation_newtest \
+//     ${resources}/N_samples \
+//     ${out}AC_counts/${i}_AC \
+//     tmp_1kgp${i}.txt
+//     """
+// }
+ 
+//  /*
+//  * STEP - sort_compress: Sort and compress site metric data for KING step
+//  */
+// process sort_compress {
+//     publishDir "${params.outdir}/", mode: params.publish_dir_mode
+
+//     input:
+//     file annotated_variants_txt from ch_files_annotated_variants
+
+//     output:
+//     set file ("*bgz", "*tbi") into ch_files_txt
+
+//     script:
+
+//     """
+//     sort -k2 -n ${out}Annotation_newtest/BCFtools_site_metrics_SUBCOLS${i}.txt > \
+//     ${out}Annotation_newtest/BCFtools_site_metrics_SUBCOLS${i}_sorted.txt
+//     bgzip -f ${out}Annotation_newtest/BCFtools_site_metrics_SUBCOLS${i}_sorted.txt && \
+//     tabix -s1 -b2 -e2 ${out}Annotation_newtest/BCFtools_site_metrics_SUBCOLS${i}_sorted.txt.gz
+//     #rm ${out}Annotation/BCFtools_site_metrics_SUBCOLS${i}_sorted.txt &&
+//     #rm tmp_1kgp${i}.txt
+//     """
+// }
+
+// //  KING WORKFLOW
+
+// /*
+//  * STEP - filter_regions: Produce BCFs of our data filtered to sites pass sites
+//  */
+// process filter_regions {
+//     publishDir "${params.outdir}/", mode: params.publish_dir_mode
+
+//     input:
+//     file sample_bcf from ch_files_bcf
+//     file site metrics 
+//     file king_sites
+
+//     output:
+//     file "*ids.txt" into ch_files_txt
+
+//     script:
+//     """
+//     bcftools view ${bcf} \
+//     -T ${out}Annotation_newtest/BCFtools_site_metrics_SUBCOLS${i}_sorted.txt.gz  \
+//     -Ob \
+//     -o ${out}AnnotatedVCFs/regionsFiltered/${i}_regionsFiltered.bcf
+//     """
+// }
+
+// /*
+//  * STEP - consensus_and_maf_filter: Second stage filtering to give biallelic SNPs intersected with 1000KGP3 with MAF > 0.01
+//  * STEP - further_filtering:        Second stage filtering to give biallelic SNPs intersected with 1000KGP3 with MAF > 0.01
+//  */
+// process further_filtering {
+//     publishDir "${params.outdir}/", mode: params.publish_dir_mode
+
+//     input:
+//     file sample_bcf from ch_files_bcf
+
+//     output:
+//     file "*positions.txt" into ch_files_txt
+//     file "*bcf" into ch_files_bcf
+
+//     script:
+//     """
+//     bcftools view ${out}AnnotatedVCFs/regionsFiltered/${i}_regionsFiltered.bcf \
+//     -i 'INFO/OLD_MULTIALLELIC="." & INFO/OLD_CLUMPED="."' \
+//     -T ^${resources}/MichiganLD_liftover_exclude_regions.txt \
+//     -v snps  | \
+//     bcftools annotate \
+//     --set-id '%CHROM:%POS-%REF/%ALT-%INFO/OLD_CLUMPED-%INFO/OLD_MULTIALLELIC' | \
+//     bcftools +fill-tags -Ob \
+//     -o ${out}AnnotatedVCFs/regionsFiltered/MichiganLD_regionsFiltered_${i}.bcf \
+//     -- -t MAF
+//     #Produce filtered txt file
+//     bcftools query ${out}AnnotatedVCFs/regionsFiltered/MichiganLD_regionsFiltered_${i}.bcf \
+//     -i 'MAF[0]>0.01' -f '%CHROM\t%POS\t%REF\t%ALT\t%MAF\n' | \
+//     awk -F "\t" '{ if(($3 == "G" && $4 == "C") || ($3 == "A" && $4 == "T")) {next} { print $0} }' \
+//     > ${out}AnnotatedVCFs/MAF_filtered_1kp3intersect_${i}.txt
+//     """
+// }
+
+// /*
+//  * STEP - create_final_king_vcf: Produce new BCF just with filtered sites
+//  */
+// process create_final_king_vcf {
+//     publishDir "${params.outdir}/", mode: params.publish_dir_mode
+
+//     input:
+//     file agg_samples_txt from ..
+//     file filtered_regions_bcf from ..
+//     file intersected_sites_txt from ..
+    
+//     output:
+//     file "*vcf.gz*" into ch_files_vcf
+
+//     script:
+//     """
+//     #Now filter down our file to just samples we want in our GRM. This removes any withdrawals that we learned of during the process of aggregation
+//     #Store the header
+//     bcftools view \
+//     -S ${resources}78389_final_platekeys_agg_v9.txt \
+//     --force-samples \
+//     -h ${out}AnnotatedVCFs/regionsFiltered/MichiganLD_regionsFiltered_${i}.bcf \
+//     > ${out}KING/${i}_filtered.vcf
+    
+//     #Then match against all variant cols in our subsetted bcf to our maf filtered, intersected sites and only print those that are in the variant file.
+//     #Then append this to the stored header, SNPRelate needs vcfs so leave as is
+//     bcftools view \
+//     -H ${out}AnnotatedVCFs/regionsFiltered/MichiganLD_regionsFiltered_${i}.bcf \
+//     -S ${resources}78389_final_platekeys_agg_v9.txt \
+//     --force-samples \
+//     | awk -F '\t' 'NR==FNR{c[$1$2$3$4]++;next}; c[$1$2$4$5] > 0' ${out}AnnotatedVCFs/MAF_filtered_1kp3intersect_${i}.txt - >> ${out}KING/${i}_filtered.vcf
+//     bgzip ${out}KING/${i}_filtered.vcf
+//     tabix ${out}KING/${i}_filtered.vcf.gz
+//     """
+// }
+
+// /*
+//  * STEP - concat_king_vcf: Concatenate compressed vcfs to per chromosome files
+//  */
+// process concat_king_vcf {
+//     publishDir "${params.outdir}/", mode: params.publish_dir_mode
+
+//     input:
+//     file vcf_gz from ch_vcfs
+
+//     output:
+//     file "chrom*_merged_filtered.vcf.gz" into ch_vcfs_per_chromosome
+
+//     script:
+//     """
+//     find ${out}KING -type f -name "chr${i}_*.vcf.gz" > tmp.files_chrom${i}.txt
+//     bcftools concat \
+//     -f tmp.files_chrom${i}.txt \
+//     -Oz \
+//     -o ${out}perChrom_KING/chrom${i}_merged_filtered.vcf.gz && \
+//     tabix ${out}perChrom_KING/chrom${i}_merged_filtered.vcf.gz && \
+//     rm tmp.files_chrom${i}.txt
+//     """
+// }
+
+// /*
+//  * STEP - make_bed_all: Make BED files for 1000KGP3 intersected vcfs
+//  */
+
+// process make_bed_all {
+//     publishDir "${params.outdir}/", mode: params.publish_dir_mode
+
+//     input:
+//     file chr_merged_filt_vcf from ch_vcfs_per_chromosome
+
+//     output:
+//     file "*BED_*" into ch_files_beds
+
+//     script:
+
+//     """
+//     bcftools view ${out}perChrom_KING/chrom${i}_merged_filtered.vcf.gz \
+//     -Ov |\
+//     plink --vcf /dev/stdin \
+//     --vcf-half-call m \
+//     --double-id \
+//     --make-bed \
+//     --real-ref-alleles \
+//     --allow-extra-chr \
+//     --out ${out}BEDref/BED_${i}
+//     """
+// }
+
+// /*
+//  * STEP - ld_bed: LD prune SNPs
+//  */
+
+//  process ld_bed {
+//     publishDir "${params.outdir}/", mode: params.publish_dir_mode
+
+//     input:
+//     tuple bed, bim, fam from ch_files_bed
+
+//     output:
+//     file "*bed_exluded_high_ld*" into ch_files_beds
+
+//     script:
+//     """
+//     #Not considering founders in this as all of our SNPs are common
+//     plink  \
+//     --exclude range ${resources}/MichiganLD_liftover_exclude_regions_PARSED.txt \
+//     --keep-allele-order \
+//     --bfile ${out}BED/BED_${i} \
+//     --indep-pairwise 500kb 1 0.1 \
+//     --out ${out}BED/BED_LD_${i}
+    
+//     #Now that we have our correct list of SNPs (prune.in), filter the original
+//     #bed file to just these sites
+//     plink \
+//     --make-bed \
+//     --bfile ${out}BED/BED_${i} \
+//     --keep-allele-order \
+//     --extract ${out}/BED/BED_LD_${i}.prune.in \
+//     --double-id \
+//     --allow-extra-chr \
+//     --out ${out}BED/BED_LDpruned_${i}
+//     """
+// }
+
+// /*
+//  * STEP - merge_autosomes: Merge autosomes to genome wide BED files
+//  */
+
+// process merge_autosomes {
+//     publishDir "${params.outdir}/", mode: params.publish_dir_mode
+
+//     input:
+//     file chr_ld_pruned_bed from ch_files_beds.collect()
+
+//     output:
+//     file "*ids.txt" into ch_files_txt
+
+//     script:
+//     """
+//     for i in {1..22}; do
+//         echo ${out}BED/BED_LDpruned_$i >> mergelist.txt
+//     done
+//     plink --merge-list mergelist.txt \
+//     --make-bed \
+//     --out ${out}BED/autosomes_LD_pruned_1kgp3Intersect
+//     rm mergelist.txt
+//     """
+// }
+
+// /*
+//  * STEP - hwe_pruning_30k_data: Produce a first pass HWE filter
+//  * We use:
+//  * The 195k SNPs from above
+//  * The intersection bfiles (on all 80k)
+//  * Then we make BED files of unrelated individuals for each superpop (using only unrelated samples from 30k)
+//  * We do this using the inferred ancestries from the 30k
+//  */
+
+// // TODO: consider decoupling R scripts from plink scripts
+// process hwe_pruning_30k_data {
+//     publishDir "${params.outdir}/", mode: params.publish_dir_mode
+
+//     input:
+//     file sample_bcf from ch_files_bcf
+
+//     output:
+//     file "*ids.txt" into ch_files_txt
+
+//     script:
+//     """
+//     R -e 'library(data.table) 
+//     library(dplyr) 
+//     dat <- fread("aggV2_R9_M30K_1KGP3_ancestry_assignment_probs.tsv") %>% as_tibble();
+//     unrels <- fread("/re_gecip/BRS/thanos/aggV2_bedmerge_30KSNPs_labkeyV9_08062020_update_PCsancestryrelated.tsv") %>% as_tibble() %>% filter(unrelated_set == 1);
+//     dat <- dat %>% filter(plate_key %in% unrels$plate_key);
+//     for(col in c("AFR","EUR","SAS","EAS")){dat[dat[col]>0.8,c("plate_key",col)] %>% write.table(paste0(col,"pop.txt"), quote = F, row.names=F, sep = "\t")}'
+
+//     bedmain="${out}/BED/autosomes_LD_pruned_1kgp3Intersect"
+//     for pop in AFR EUR SAS EAS; do
+//         echo ${pop}
+//         awk '{print $1"\t"$1}' ${pop}pop.txt > ${pop}keep
+//         plink \
+//         --keep ${pop}keep \
+//         --make-bed \
+//         --bfile ${bedmain} \
+//         --out ${pop}
+        
+//         plink --bfile ${pop} --hardy --out ${pop} --nonfounders
+//     done
+
+//     #Combine the HWE and produce a list of pass 
+//     R -e 'library(data.table);
+//     library(dplyr);
+//     dat <- lapply(c("EUR.hwe","AFR.hwe", "SAS.hwe", "EAS.hwe"),fread);
+//     names(dat) <- c("EUR.hwe","AFR.hwe", "SAS.hwe", "EAS.hwe");
+//     dat <- dat %>% bind_rows(.id="id");
+//     write.table(dat, "combinedHWE.txt", row.names = F, quote = F)'
+//     R -e 'library(dplyr); library(data.table);
+//         dat <- fread("combinedHWE.txt") %>% as_tibble()
+//         #Create set that is just SNPS that are >10e-6 in all pops
+//         dat %>% filter(P >10e-6) %>% group_by(SNP) %>% count() %>% filter(n==4) %>% select(SNP) %>% distinct() %>%
+//         write.table("hwe10e-6_superpops_195ksnps", sep="\t", row.names = F, quote = F)
+//         '
+//     R -e 'library(dplyr); library(data.table);
+//         dat <- fread("combinedHWE.txt") %>% as_tibble()
+//         #Create set that is just SNPS that are >10e-2 in all pops
+//         dat %>% filter(P >10e-2) %>% group_by(SNP) %>% count() %>% filter(n==4) %>% select(SNP) %>% distinct() %>%
+//         write.table("hwe10e-2_superpops_195ksnps", sep="\t", row.names = F, quote = F)'
+//     """
+// }
+
+// /*
+//  * STEP - get_king_coeffs: 
+//  */
+
+// process get_king_coeffs {
+//     publishDir "${params.outdir}/", mode: params.publish_dir_mode
+
+//     input:
+//     file sample_bcf from ch_files_bcf
+
+//     output:
+//     file "*ids.txt" into ch_files_txt
+
+//     script:
+
+//     """
+//     plink2 --bfile \
+//     ${out}BED/autosomes_LD_pruned_1kgp3Intersect \
+//     --make-king square \
+//     --out \
+//     ${out}KING/matrix/autosomes_LD_pruned_1kgp3Intersect \
+//     --thread-num 30
+//     """
+// }
+
+// /*
+//  * STEP - get_king_coeffs_alt
+//  * Daniel's notes:
+//  * The main difference for this is that we are aiming to do all the pcAIR
+//  * using other tools. Therefore the output needs to be different
+//  */
+
+// process get_king_coeffs_alt {
+//     publishDir "${params.outdir}/", mode: params.publish_dir_mode
+
+//     input:
+//     file sample_bcf from ch_files_bcf
+
+//     output:
+//     file "*ids.txt" into ch_files_txt
+
+//     script:
+
+//     """
+//     plink2 --bfile \
+//     ${out}BED/autosomes_LD_pruned_1kgp3Intersect \
+//     --make-king triangle bin \
+//     --out \
+//     ${out}KING/matrix/autosomes_LD_pruned_1kgp3Intersect_triangle \
+//     --thread-num 30
+//     """
+// }
+
+// /*
+//  * STEP - pcair_alternate: 
+//  * Daniel's notes:
+//  * This isn't actually intended to run as a function, it is just to stop stuff running
+//  * when sourcing this file that we wrap it in a function
+//  * Alternate approach to producing the PC-relate info
+//  */
+
+// process pcair_alternate {
+//     publishDir "${params.outdir}/", mode: params.publish_dir_mode
+
+//     input:
+//     file sample_bcf from ch_files_bcf
+
+//     output:
+//     file "*ids.txt" into ch_files_txt
+
+//     script:
+
+//     """
+//     plink2 --bfile ${out}BED/autosomes_LD_pruned_1kgp3Intersect \
+//        --king-cutoff ${out}KING/matrix/autosomes_LD_pruned_1kgp3Intersect_triangle 0.0442 && \
+//        mv plink2.king.cutoff.in.id autosomes_LD_pruned_1kgp3Intersect.king.cutoff.in.id && \
+//        mv plink2.king.cutoff.out.id autosomes_LD_pruned_1kgp3Intersect.king.cutoff.out.id
 
 
-/*
- * STEP - prep_hwe: Produce list of samples by super pop (probability > 0.8)
- * NOTES:
- * Taking the files produced in prep_hwe, run HWE on each subset of samples for each file.
- * It would be faste rto parallelise across files too, but the super-pops apart from EUR shouldn't
- * take too long
- */
+//     ##Partitions for the alternate triangles
+//     plink2 --bfile ${out}BED/autosomes_LD_pruned_1kgp3Intersect \
+//        --king-cutoff ${out}KING/matrix/autosomes_LD_pruned_1kgp3Intersect_triangle_HWE10_2 0.0442 && \
+//        mv plink2.king.cutoff.in.id  autosomes_LD_pruned_1kgp3Intersect_triangle_HWE10_2.king.cutoff.in.id && \
+//        mv plink2.king.cutoff.out.id  autosomes_LD_pruned_1kgp3Intersect_triangle_HWE10_2.king.cutoff.out.id
+//     plink2 --bfile ${out}BED/autosomes_LD_pruned_1kgp3Intersect \
+//        --king-cutoff ${out}KING/matrix/autosomes_LD_pruned_1kgp3Intersect_triangle_HWE10_6 0.0442 && \
+//        mv plink2.king.cutoff.in.id  autosomes_LD_pruned_1kgp3Intersect_triangle_HWE10_6.king.cutoff.in.id && \
+//        mv plink2.king.cutoff.out.id  autosomes_LD_pruned_1kgp3Intersect_triangle_HWE10_6.king.cutoff.out.id
 
-process p_hwe {
-    publishDir "${params.outdir}/", mode: params.publish_dir_mode,
+//     #Let's now have a look at how muhc overlaps in the kinship based on the HWE cutoffs
+//     R -e 'library(data.table); library(dplyr); library(magrittr);
+//         dat <- fread("autosomes_LD_pruned_1kgp3Intersect.king.cutoff.in.id") %>% as_tibble();
+//         hwe2 <- fread("autosomes_LD_pruned_1kgp3Intersect_triangle_HWE10_2.king.cutoff.in.id") %>% as_tibble();
+//         hwe6 <- fread("autosomes_LD_pruned_1kgp3Intersect_triangle_HWE10_6.king.cutoff.in.id") %>% as_tibble();
+//         dat <- bind_rows(dat, hwe2, hwe6, .id="id");
+//         dat %>% group_by(id) %>% summarise(n()); 
+//         dat %>% group_by(IID) %>% summarise(n=n()) %>% count(n)  '
 
-    input:
-    file sample_bcf from ch_files_bcf
+//     #Filter the file
+//     plink2 --bfile ${out}BED/autosomes_LD_pruned_1kgp3Intersect \
+//     --make-bed \
+//     --keep ${out}KING/matrix/plink2.king.cutoff.in.id \
+//     --out ${out}KING/matrix/autosomes_LD_pruned_1kgp3Intersect_unrelated
 
-    output:
-    file "*ids.txt" into ch_files_txt
+//     #Also produce a related set
+//     #Filter the file
+//     plink2 --bfile ${out}BED/autosomes_LD_pruned_1kgp3Intersect \
+//     --make-bed \
+//     --remove ${out}KING/matrix/plink2.king.cutoff.in.id \
+//     --out ${out}KING/matrix/autosomes_LD_pruned_1kgp3Intersect_related
+//     """
+//  }
 
-    script:
+// /*
+//  * STEP - prep_hwe: Produce list of samples by super pop (probability > 0.8)
+//  */
 
-    """
-    for pop in AFR EUR SAS EAS; do
-        echo -e "Calculating HWE on ${pop} samples..."
-        plink --bcf ${infile} \
-        --hardy midp \
-        --keep ${out}/Ancestries/${pop}_unrelated.keep \
-        --double-id \
-        --allow-extra-chr \
-        --out ${out}/HWE/${i}_$pop
-    done
-    """
-}
+// process prep_hwe {
+//     publishDir "${params.outdir}/", mode: params.publish_dir_mode
 
-/*
- * STEP - end_aggregate_annotation: Annotate and make pass/fail. print subset of cols
- * NOTES:
- * Taking the files produced in prep_hwe, run HWE on each subset of samples for each file.
- * It would be faste rto parallelise across files too, but the super-pops apart from EUR shouldn't
- * take too long
- */
+//     input:
+//     file sample_bcf from ch_files_bcf
 
-process end_aggregate_annotation {
-    publishDir "${params.outdir}/", mode: params.publish_dir_mode,
+//     output:
+//     file "*ids.txt" into ch_files_txt
 
-    input:
-    file sample_bcf from ch_files_bcf
+//     script:
 
-    output:
-    file "annotated_variants.txt" into ch_files_txt
+//     """
+//     tee prep_hwe.R <<EOF  
+//     library(data.table)
+//     library(dplyr)
+//          dat <- fread("/re_gecip/shared_allGeCIPs/drhodes/Aggregation_79k/out_actual/Ancestries/aggV2_ancestry_assignment_probs_1KGP3_200K.tsv") %>% as_tibble()
+//         for(col in c("AFR","EUR","SAS","EAS")){dat[dat[col]>0.8,c("Sample",col)] %>%
+//         write.table(paste0('/re_gecip/shared_allGeCIPs/drhodes/Aggregation_79k/out_actual/Ancestries/',col,"pop.txt"), quote = F, row.names=F, sep = "\t")};
+//     EOF
+//     chmod +x prep_hwe.R
+//     Rscript prep_hwe.R
+//     #Produce an unrelated version of each of these lists too
+//     for pop in AFR EUR SAS EAS; do
+//         echo -e "Running ${pop}..."
+//         awk 'NR==FNR{a[$2]; next} ($1) in a' ${out}KING/matrix/autosomes_LD_pruned_1kgp3Intersect_triangle_HWE10_6.king.cutoff.in.id ${out}/Ancestries/${pop}pop.txt > \
+//         ${out}/Ancestries/${pop}_unrelated.txt
+//         awk '{print $1"\t"$1}' ${out}/Ancestries/${pop}_unrelated.txt > ${out}/Ancestries/${pop}_unrelated.keep
+//     done
+//     wc -l ${out}/Ancestries/*_unrelated.txt
+//     """
+// }
 
-    script:
-    """
-    annotatePerChunk.R \
-    ${i} \
-    ${out}startfile/start_file_${i} \
-    ${out}missing2/missing1_${i} \
-    ${out}missing2/missing2_${i} \
-    ${out}medianCoverageAll/medianCoverageAll${i} \
-    ${out}medianCoverageNonMiss/medianNonMiss_depth_${i} \
-    ${out}medianGQ/medianGQ_${i} \
-    ${out}AB_hetAll/hetAll_${i} \
-    ${out}AB_hetPass/hetPass_${i} \
-    ${out}MendelErrSites/MendErr_${i}.lmendel \
-    ${out}Annotation_final \
-    ${resources}/N_samples \
-    ${out}AC_counts/${i}_AC \
-    ignore #unused arg in this argument
-    """
-}
+
+// /*
+//  * STEP - prep_hwe: Produce list of samples by super pop (probability > 0.8)
+//  * NOTES:
+//  * Taking the files produced in prep_hwe, run HWE on each subset of samples for each file.
+//  * It would be faste rto parallelise across files too, but the super-pops apart from EUR shouldn't
+//  * take too long
+//  */
+
+// process p_hwe {
+//     publishDir "${params.outdir}/", mode: params.publish_dir_mode
+
+//     input:
+//     file sample_bcf from ch_files_bcf
+
+//     output:
+//     file "*ids.txt" into ch_files_txt
+
+//     script:
+
+//     """
+//     for pop in AFR EUR SAS EAS; do
+//         echo -e "Calculating HWE on ${pop} samples..."
+//         plink --bcf ${bcf} \
+//         --hardy midp \
+//         --keep ${out}/Ancestries/${pop}_unrelated.keep \
+//         --double-id \
+//         --allow-extra-chr \
+//         --out ${out}/HWE/${i}_$pop
+//     done
+//     """
+// }
+
+// /*
+//  * STEP - end_aggregate_annotation: Annotate and make pass/fail. print subset of cols
+//  * NOTES:
+//  * Taking the files produced in prep_hwe, run HWE on each subset of samples for each file.
+//  * It would be faste rto parallelise across files too, but the super-pops apart from EUR shouldn't
+//  * take too long
+//  */
+
+// process end_aggregate_annotation {
+//     publishDir "${params.outdir}/", mode: params.publish_dir_mode
+
+//     input:
+//     file sample_bcf from ch_files_bcf
+
+//     output:
+//     file "annotated_variants.txt" into ch_files_txt
+
+//     script:
+//     """
+//     annotatePerChunk.R \
+//     ${i} \
+//     ${out}startfile/start_file_${i} \
+//     ${out}missing2/missing1_${i} \
+//     ${out}missing2/missing2_${i} \
+//     ${out}medianCoverageAll/medianCoverageAll${i} \
+//     ${out}medianCoverageNonMiss/medianNonMiss_depth_${i} \
+//     ${out}medianGQ/medianGQ_${i} \
+//     ${out}AB_hetAll/hetAll_${i} \
+//     ${out}AB_hetPass/hetPass_${i} \
+//     ${out}MendelErrSites/MendErr_${i}.lmendel \
+//     ${out}Annotation_final \
+//     ${resources}/N_samples \
+//     ${out}AC_counts/${i}_AC \
+//     ignore #unused arg in this argument
+//     """
+// }
 
 def nfcoreHeader() {
     // Log colors ANSI codes
