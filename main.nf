@@ -87,24 +87,28 @@ if (workflow.profile.contains('awsbatch')) {
 }
 
 // Define variables
-  query_format_start = params.query_format_start
-  query_format_miss1 = params.query_format_miss1
-  query_include_miss1 = params.query_include_miss1
-  query_format_miss2 = params.query_format_miss2
-  query_exclude_miss2 = params.query_exclude_miss2
-  query_format_med_cov_all = params.query_format_med_cov_all
-  awk_expr_med_cov_all = params.awk_expr_med_cov_all
-  query_format_med_cov_nonmisss = params.query_format_med_cov_nonmisss
-  query_exclude_med_cov_nonmiss =  params.query_exclude_med_cov_nonmiss
-  awk_expr_med_cov_nonmiss = params.awk_expr_med_cov_nonmiss
-  query_format_median_gq = params.query_format_median_gq
-  query_exclude_median_gq = params.query_exclude_median_gq
-  awk_expr_median_gq = params.awk_expr_median_gq
-  query_format_ab_ratio_p1 = params.query_format_ab_ratio_p1
-  query_include_ab_ratio_1 = params.query_include_ab_ratio_1
-  query_format_ab_ratio_p2 = params.query_format_ab_ratio_p2
-  query_include_ab_ratio_2 =  params.query_include_ab_ratio_2
-  query_format_pull_ac = params.query_format_pull_ac
+query_format_start = params.query_format_start
+query_format_miss1 = params.query_format_miss1
+query_include_miss1 = params.query_include_miss1
+query_format_miss2 = params.query_format_miss2
+query_exclude_miss2 = params.query_exclude_miss2
+awk_expr_miss2 = params.awk_expr_miss2
+query_format_med_cov_all = params.query_format_med_cov_all
+awk_expr_med_cov_all = params.awk_expr_med_cov_all
+query_format_med_cov_nonmisss = params.query_format_med_cov_nonmisss
+query_exclude_med_cov_nonmiss =  params.query_exclude_med_cov_nonmiss
+awk_expr_med_cov_nonmiss = params.awk_expr_med_cov_nonmiss
+query_format_median_gq = params.query_format_median_gq
+query_exclude_median_gq = params.query_exclude_median_gq
+awk_expr_median_gq = params.awk_expr_median_gq
+query_format_ab_ratio_p1 = params.query_format_ab_ratio_p1
+query_include_ab_ratio_1 = params.query_include_ab_ratio_1
+query_format_ab_ratio_p2 = params.query_format_ab_ratio_p2
+query_include_ab_ratio_2 =  params.query_include_ab_ratio_2
+query_format_pull_ac = params.query_format_pull_ac
+awk_expr_miss1 = params.awk_expr_miss1
+awk_expr_miss2 = params.awk_expr_miss2
+awk_expr_ab_ratio_1 = params.awk_expr_ab_ratio_1
 
 // Define channels based on params
 // Input list .csv file of tissues to analyse
@@ -129,8 +133,26 @@ ch_bcfs_ab_ratio_p2,
 ch_bcfs_pull_ac) = ch_bcfs.into(10)
 
 // List with sample ids to include/exclude
-ch_xy_sample_id_files = Channel.fromPath(params.xy_sample_ids)
-ch_xx_sample_id_files = Channel.fromPath(params.xx_sample_ids)
+ch_xy_sample_id_files = Channel.fromPath(params.xy_sample_ids, checkIfExists: true)
+ch_xx_sample_id_files = Channel.fromPath(params.xx_sample_ids, checkIfExists: true)
+
+(ch_xy_sample_id_start_file, 
+ch_xy_sample_id_miss1, 
+ch_xy_sample_id_miss2, 
+ch_xy_sample_id_med_cov_all,
+ch_xy_sample_id_med_cov_non_miss,
+ch_xy_sample_id_median_gq,
+ch_xy_sample_id_ab_ratio_p1,
+ch_xy_sample_id_ab_ratio_p2) = ch_xy_sample_id_files.into(8)
+
+(ch_xx_sample_id_start_file, 
+ch_xx_sample_id_miss1, 
+ch_xx_sample_id_miss2, 
+ch_xx_sample_id_med_cov_all,
+ch_xx_sample_id_med_cov_non_miss,
+ch_xx_sample_id_median_gq,
+ch_xx_sample_id_ab_ratio_p1,
+ch_xx_sample_id_ab_ratio_p2) = ch_xx_sample_id_files.into(8)
 
 // Header log info
 log.info nfcoreHeader()
@@ -158,29 +180,29 @@ log.info summary.collect { k,v -> "${k.padRight(18)}: $v" }.join("\n")
 log.info "-\033[2m--------------------------------------------------\033[0m-"
 
 
-/*
- * Parse software version numbers
- */
-process get_software_versions {
-    publishDir "${params.outdir}/pipeline_info", mode: params.publish_dir_mode
-        saveAs: { filename ->
-                      if (filename.indexOf(".csv") > 0) filename
-                      else null
-                }
+// /*
+//  * Parse software version numbers
+//  */
+// process get_software_versions {
+//     publishDir "${params.outdir}/pipeline_info", mode: params.publish_dir_mode
+//         saveAs: { filename ->
+//                       if (filename.indexOf(".csv") > 0) filename
+//                       else null
+//                 }
 
-    output:
-    file 'software_versions_mqc.yaml' into ch_software_versions_yaml
-    file "software_versions.csv"
+//     output:
+//     file 'software_versions_mqc.yaml' into ch_software_versions_yaml
+//     file "software_versions.csv"
 
-    script:
-    // TODO nf-core: Get all tools to print their version number here
-    """
-    echo $workflow.manifest.version > v_pipeline.txt
-    echo $workflow.nextflow.version > v_nextflow.txt
-    multiqc --version > v_multiqc.txt
-    scrape_software_versions.py &> software_versions_mqc.yaml
-    """
-}
+//     script:
+//     // TODO nf-core: Get all tools to print their version number here
+//     """
+//     echo $workflow.manifest.version > v_pipeline.txt
+//     echo $workflow.nextflow.version > v_nextflow.txt
+//     multiqc --version > v_multiqc.txt
+//     scrape_software_versions.py &> software_versions_mqc.yaml
+//     """
+// }
 
 /*
  * STEP - start_file:  Create a backbone of IDs for other data to be joined to
@@ -198,8 +220,8 @@ process start_file {
 
     input:
     set val(region), file(bcf), file(index) from ch_bcfs_start_file
-    each file(xy_sample_ids) from ch_xy_sample_id_files
-    each file(xx_sample_ids) from ch_xx_sample_id_files
+    each file(xy_sample_ids) from ch_xy_sample_id_start_file
+    each file(xx_sample_ids) from ch_xx_sample_id_start_file
 
     output:
     file "start_file_*" into ch_template_startfiles
@@ -226,19 +248,19 @@ process missingness_1 {
 
     input:
     set val(region), file(bcf), file(index) from ch_bcfs_miss1
-    each file(xy_sample_ids) from ch_xy_sample_id_files
-    each file(xx_sample_ids) from ch_xx_sample_id_files
+    each file(xy_sample_ids) from ch_xy_sample_id_miss1
+    each file(xx_sample_ids) from ch_xx_sample_id_miss1
 
     output:
-    file "missing1_*" into ch_files_miss1
+    file "missing1_*" into ch_outputs_miss1
 
     script:
     """
     if [[ $region == *"chrX"* ]] || [[ $region == *"chrY"* ]] ; then
-        bcftools query ${bcf} -f '${query_format_miss1}' -i '${query_include_miss1}' -S ${xy_sample_ids} | awk 'BEGIN{FS=" "} {print $1" "NF-1}' > missing1_${region}_XY
-        bcftools query ${bcf} -f '${query_format_miss1}' -i '${query_include_miss1}' -S ${xy_sample_ids} | awk 'BEGIN{FS=" "} {print $1" "NF-1}' > missing1_${region}_XY
+        bcftools query ${bcf} -f '${query_format_miss1}' -i '${query_include_miss1}' -S ${xy_sample_ids} | awk '${awk_expr_miss1}' > missing1_${region}_XY
+        bcftools query ${bcf} -f '${query_format_miss1}' -i '${query_include_miss1}' -S ${xy_sample_ids} | awk '${awk_expr_miss1}' > missing1_${region}_XY
     else
-        bcftools query ${bcf} -f '${query_format_miss1}' -i '${query_include_miss1}' | awk 'BEGIN{FS=" "} {print $1" "NF-1}' > missing1_${region}
+        bcftools query ${bcf} -f '${query_format_miss1}' -i '${query_include_miss1}' | awk '${awk_expr_miss1}' > missing1_${region}
     fi
     """
  }
@@ -251,20 +273,19 @@ process missingness_2 {
 
     input:
     set val(region), file(bcf), file(index) from ch_bcfs_miss2
-    each file(xy_sample_ids) from ch_xy_sample_id_files
-    each file(xx_sample_ids) from ch_xx_sample_id_files
+    each file(xy_sample_ids) from ch_xy_sample_id_miss2
+    each file(xx_sample_ids) from ch_xx_sample_id_miss2
 
     output:
-    file "missing2_*" into ch_files_txt
+    file "missing2_*" into ch_outputs_miss2
 
-    script
-    params.query_exclude_miss2 = 'GT~"\."'
+    script:
     """
     if [[ $region == *"chrX"* ]] || [[ $region == *"chrY"* ]] ; then
-        bcftools query ${bcf} -f '${query_format_miss2}' -e '${query_exclude_miss2}' -S ${xy_sample_ids} | awk 'BEGIN{FS=" "} {print $1" "NF-1}' > missing2_${region}_XY
-        bcftools query ${bcf} -f '${query_format_miss2}' -e '${query_exclude_miss2}' -S ${xx_sample_ids} | awk 'BEGIN{FS=" "} {print $1" "NF-1}' > missing2_${region}_XX        
+        bcftools query ${bcf} -f '${query_format_miss2}' -e '${query_exclude_miss2}' -S ${xy_sample_ids} | awk '${awk_expr_miss2}' > missing2_${region}_XY
+        bcftools query ${bcf} -f '${query_format_miss2}' -e '${query_exclude_miss2}' -S ${xx_sample_ids} | awk '${awk_expr_miss2}' > missing2_${region}_XX        
     else
-        bcftools query ${bcf} -f '${query_format_miss2}' -e '${query_exclude_miss2}' | awk 'BEGIN{FS=" "} {print $1" "NF-1}' > missing2_${region}
+        bcftools query ${bcf} -f '${query_format_miss2}' -e '${query_exclude_miss2}' | awk '${awk_expr_miss2}' > missing2_${region}
     fi
     """
  }
@@ -279,19 +300,19 @@ process complete_sites {
     publishDir "${params.outdir}/", mode: params.publish_dir_mode
 
     input:
-    set val(region), file(bcf), file(index) from from ch_bcfs_complete_sites
+    set val(region), file(bcf), file(index) from ch_bcfs_complete_sites
 
     output:
-    set val(region), file("*N_samples.txt")minto ch_bcfs_
-    val(region), env(n_samples) into ch_n_samples
+    set val(region), file("*N_samples.txt") into ch_n_samples_files
+    set val(region), env(n_samples) into ch_n_samples_env_vars
 
     script:
     // if [ ! -f "${resources}/N_samples" ]; then
     //     bsub -q short -P bio -e logs/n_samples_err%J -o logs/n_samples_out%J 
     //   'module load ${bcf}toolsLoad; 
     """
-    n_samples=`bcftools query -l ${bcf}) | wc -l`
-    bcftools query -l ${bcf} | wc -l > ${region}_N_samples.txt'
+    n_samples=`bcftools query -l ${bcf} | wc -l`
+    bcftools query -l ${bcf} | wc -l > ${region}_N_samples.txt
     """
  }
 
@@ -304,19 +325,19 @@ process median_coverage_all {
 
     input:
     set val(region), file(bcf), file(index) from ch_bcfs_med_cov_all
-    each file(xy_sample_ids) from ch_xy_sample_id_files
-    each file(xx_sample_ids) from ch_xx_sample_id_files
+    each file(xy_sample_ids) from ch_xy_sample_id_med_cov_all
+    each file(xx_sample_ids) from ch_xx_sample_id_med_cov_all
 
     output:
-    file "medianCoverageAll*" into ch_files_txt
+    file "medianCoverageAll*" into ch_outputs_med_cov_all
 
     script:
     """
     if [[ $region == *"chrX"* ]] || [[ $region == *"chrY"* ]] ; then
-        bcftools query ${bcf} -f '${query_format_med_cov_all}' -S ${xy_sample_ids} | awk ${awk_expr_med_cov_all} > medianCoverageAll${region}_XY
-        bcftools query ${bcf} -f '${query_format_med_cov_all}' -S ${xy_sample_ids} | awk ${awk_expr_med_cov_all} > medianCoverageAll${region}_XX 
+        bcftools query ${bcf} -f '${query_format_med_cov_all}' -S ${xy_sample_ids} | awk '${awk_expr_med_cov_all}' > medianCoverageAll${region}_XY
+        bcftools query ${bcf} -f '${query_format_med_cov_all}' -S ${xy_sample_ids} | awk '${awk_expr_med_cov_all}' > medianCoverageAll${region}_XX 
     else
-        bcftools query ${bcf} -f '${query_format_med_cov_all}'| awk ${awk_expr_med_cov_all} > medianCoverageAll${region}
+        bcftools query ${bcf} -f '${query_format_med_cov_all}'| awk '${awk_expr_med_cov_all}' > medianCoverageAll${region}
     fi
     """
  }
@@ -330,20 +351,20 @@ process median_coverage_non_miss {
 
     input:
     set val(region), file(bcf), file(index) from ch_bcfs_med_cov_non_miss
-    each file(xy_sample_ids) from ch_xy_sample_id_files
-    each file(xx_sample_ids) from ch_xx_sample_id_files
+    each file(xy_sample_ids) from ch_xy_sample_id_med_cov_non_miss
+    each file(xx_sample_ids) from ch_xx_sample_id_med_cov_non_miss
 
     output:
-    file "medianNonMiss_depth_*" into ch_files_txt
+    file "medianNonMiss_depth_*" into ch_outputs_med_cov_nonmiss
 
     script:
 
     """
     if [[ $region == *"chrX"* ]] || [[ $region == *"chrY"* ]] ; then
-        bcftools query ${bcf} -f '${query_format_med_cov_nonmisss}' -e '${query_exclude_med_cov_nonmiss}' -S ${xy_sample_ids} | awk ${awk_expr_med_cov_nonmiss} > medianNonMiss_depth_${region}_XY
-        bcftools query ${bcf} -f '${query_format_med_cov_nonmisss}' -e '${query_exclude_med_cov_nonmiss}' -S ${xx_sample_ids} | awk ${awk_expr_med_cov_nonmiss} > medianNonMiss_depth_${region}_XX
+        bcftools query ${bcf} -f '${query_format_med_cov_nonmisss}' -e '${query_exclude_med_cov_nonmiss}' -S ${xy_sample_ids} | awk '${awk_expr_med_cov_nonmiss}' > medianNonMiss_depth_${region}_XY
+        bcftools query ${bcf} -f '${query_format_med_cov_nonmisss}' -e '${query_exclude_med_cov_nonmiss}' -S ${xx_sample_ids} | awk '${awk_expr_med_cov_nonmiss}' > medianNonMiss_depth_${region}_XX
     else
-        bcftools query ${bcf} -f '${query_format_med_cov_nonmisss}' -e '${query_exclude_med_cov_nonmiss}' | awk ${awk_expr_med_cov_nonmiss} > medianNonMiss_depth_${region}
+        bcftools query ${bcf} -f '${query_format_med_cov_nonmisss}' -e '${query_exclude_med_cov_nonmiss}' | awk '${awk_expr_med_cov_nonmiss}' > medianNonMiss_depth_${region}
     fi
     """
  }
@@ -356,19 +377,19 @@ process median_gq {
 
     input:
     set val(region), file(bcf), file(index) from ch_bcfs_median_gq
-    each file(xy_sample_ids) from ch_xy_sample_id_files
-    each file(xx_sample_ids) from ch_xx_sample_id_files
+    each file(xy_sample_ids) from ch_xy_sample_id_median_gq
+    each file(xx_sample_ids) from ch_xx_sample_id_median_gq
 
     output:
-    file "medianGQ_*" into ch_files_txt
+    file "medianGQ_*" into ch_outputs_median_gq
 
     script:
     """
     if [[ $region == *"chrX"* ]] || [[ $region == *"chrY"* ]] ; then
-        bcftools query ${bcf} -f '${query_format_median_gq}' -e '${query_exclude_median_gq}' -S ${xy_sample_ids} | awk ${awk_expr_median_gq}  > medianGQ_${region}_XY
-        bcftools query ${bcf} -f '${query_format_median_gq}' -e '${query_exclude_median_gq}' -S ${xx_sample_ids} | awk ${awk_expr_median_gq}  > medianGQ_${region}_XX
+        bcftools query ${bcf} -f '${query_format_median_gq}' -e '${query_exclude_median_gq}' -S ${xy_sample_ids} | awk '${awk_expr_median_gq}'  > medianGQ_${region}_XY
+        bcftools query ${bcf} -f '${query_format_median_gq}' -e '${query_exclude_median_gq}' -S ${xx_sample_ids} | awk '${awk_expr_median_gq}'  > medianGQ_${region}_XX
     else
-        bcftools query ${bcf} -f '${query_format_median_gq}' -e '${query_exclude_median_gq}' | awk ${awk_expr_median_gq}  > medianGQ_${region}
+        bcftools query ${bcf} -f '${query_format_median_gq}' -e '${query_exclude_median_gq}' | awk '${awk_expr_median_gq}'  > medianGQ_${region}
     fi    
     """
  }
@@ -382,20 +403,20 @@ process ab_ratio_p1 {
 
     input:
     set val(region), file(bcf), file(index) from ch_bcfs_ab_ratio_p1
-    each file(xy_sample_ids) from ch_xy_sample_id_files
-    each file(xx_sample_ids) from ch_xx_sample_id_files
+    each file(xy_sample_ids) from ch_xy_sample_id_ab_ratio_p1
+    each file(xx_sample_ids) from ch_xx_sample_id_ab_ratio_p1
 
     output:
-    file "*N_hets_passed.txt" into ch_files_txt
+    file "*N_hets_passed.txt" into ch_outputs_ab_ratio_p1
 
     script:
 
     """
     #We only calculate AB ratio for XX
     if [[ $region == *"chrX"* ]] || [[ $region == *"chrY"* ]] ; then
-        bcftools query ${bcf} -f '${query_format_ab_ratio_p1}' -S ${xx_sample_ids} -i ${query_include_ab_ratio_1} | awk '{print $1"\t"NF -1}' > hetPass_${region}_XX
+        bcftools query ${bcf} -f '${query_format_ab_ratio_p1}' -S ${xx_sample_ids} -i '${query_include_ab_ratio_1}' | awk '${awk_expr_ab_ratio_1}' > hetPass_${region}_XX
     else
-        bcftools query ${bcf} -f '${query_format_ab_ratio_p1}' -i ${query_include_ab_ratio_1} | awk '{print $1"\t"NF -1}' > hetPass_${region}
+        bcftools query ${bcf} -f '${query_format_ab_ratio_p1}' -i ${query_include_ab_ratio_1} | awk '${awk_expr_ab_ratio_1}' > hetPass_${region}
     fi
     """
  }
@@ -409,19 +430,19 @@ process ab_ratio_p2 {
 
     input:
     set val(region), file(bcf), file(index) from ch_bcfs_ab_ratio_p2
-    each file(xy_sample_ids) from ch_xy_sample_id_files
-    each file(xx_sample_ids) from ch_xx_sample_id_files
+    each file(xy_sample_ids) from ch_xy_sample_id_ab_ratio_p2
+    each file(xx_sample_ids) from ch_xx_sample_id_ab_ratio_p2
 
     output:
-    file "hetAll_*" into ch_files_txt
+    file "hetAll_*" into ch_outputs_ab_ratio_p2
 
     script:
     """
     # We only calculate AB ratio for XX
     if [[ $region == *"chrX"* ]] || [[ $region == *"chrY"* ]] ; then
-        bcftools query ${bcf} -f '${query_format_ab_ratio_p2}' -S ${xx_sample_ids} -i ${query_include_ab_ratio_2}  'GT="het"'| awk '{print $1"\t"NF -1}' > hetAll_${region}_XX
+        bcftools query ${bcf} -f '${query_format_ab_ratio_p2}' -S ${xx_sample_ids} -i '${query_include_ab_ratio_2}' | awk '${awk_expr_ab_ratio_1}' > hetAll_${region}_XX
     else
-        bcftools query ${bcf} -f '${query_format_ab_ratio_p2}' -i ${query_include_ab_ratio_2} | awk '{print $1"\t"NF -1}' > hetAll_${region}
+        bcftools query ${bcf} -f '${query_format_ab_ratio_p2}' -i '${query_include_ab_ratio_2}' | awk '${awk_expr_ab_ratio_1}' > hetAll_${region}
     fi
     """
  }
@@ -437,7 +458,7 @@ process pull_ac {
     set val(region), file(bcf), file(index) from ch_bcfs_pull_ac
     
     output:
-    file "*_AC" into ch_files_txt
+    file "*_AC" into ch_outputs_pull_ac
 
     script:
     """
@@ -1130,14 +1151,7 @@ def nfcoreHeader() {
     c_white = params.monochrome_logs ? '' : "\033[0;37m";
     c_yellow = params.monochrome_logs ? '' : "\033[0;33m";
 
-    return """    -${c_dim}--------------------------------------------------${c_reset}-
-                                            ${c_green},--.${c_black}/${c_green},-.${c_reset}
-    ${c_blue}        ___     __   __   __   ___     ${c_green}/,-._.--~\'${c_reset}
-    ${c_blue}  |\\ | |__  __ /  ` /  \\ |__) |__         ${c_yellow}}  {${c_reset}
-    ${c_blue}  | \\| |       \\__, \\__/ |  \\ |___     ${c_green}\\`-._,-`-,${c_reset}
-                                            ${c_green}`._,._,\'${c_reset}
-    ${c_purple}  nf-core/siteqc v${workflow.manifest.version}${c_reset}
-    -${c_dim}--------------------------------------------------${c_reset}-
+    return """
     """.stripIndent()
 }
 
