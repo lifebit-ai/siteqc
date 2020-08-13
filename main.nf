@@ -320,111 +320,115 @@ process complete_sites {
  * STEP - median_coverage_all: Produce median value for depth across all GT
  */
 
-process median_coverage_all {
-    publishDir "${params.outdir}/median_coverage_all/", mode: params.publish_dir_mode
+// process median_coverage_all {
+//     publishDir "${params.outdir}/median_coverage_all/", mode: params.publish_dir_mode
 
-    input:
-    set val(region), file(bcf), file(index) from ch_bcfs_med_cov_all
-    each file(xy_sample_ids) from ch_xy_sample_id_med_cov_all
-    each file(xx_sample_ids) from ch_xx_sample_id_med_cov_all
+//     input:
+//     set val(region), file(bcf), file(index) from ch_bcfs_med_cov_all
+//     each file(xy_sample_ids) from ch_xy_sample_id_med_cov_all
+//     each file(xx_sample_ids) from ch_xx_sample_id_med_cov_all
 
-    output:
-    file "medianCoverageAll*" into ch_outputs_med_cov_all
+//     output:
+//     file "medianCoverageAll*" into ch_outputs_med_cov_all
 
-    script:
-    """
-    if [[ $region == *"chrX"* ]] || [[ $region == *"chrY"* ]] ; then
-        bcftools query ${bcf} -f '${query_format_med_cov_all}' -S ${xy_sample_ids} | awk '${awk_expr_med_cov_all}' > medianCoverageAll${region}_XY
-        bcftools query ${bcf} -f '${query_format_med_cov_all}' -S ${xy_sample_ids} | awk '${awk_expr_med_cov_all}' > medianCoverageAll${region}_XX 
-    else
-        bcftools query ${bcf} -f '${query_format_med_cov_all}'| awk '${awk_expr_med_cov_all}' > medianCoverageAll${region}
-    fi
-    """
- }
+//     script:
+//     """
+//     if [[ $region == *"chrX"* ]] || [[ $region == *"chrY"* ]] ; then
+//         bcftools query ${bcf} -f '${query_format_med_cov_all}' -S ${xy_sample_ids} | awk '${awk_expr_med_cov_all}' > medianCoverageAll${region}_XY
+//         bcftools query ${bcf} -f '${query_format_med_cov_all}' -S ${xy_sample_ids} | awk '${awk_expr_med_cov_all}' > medianCoverageAll${region}_XX 
+//     else
+//         bcftools query ${bcf} -f '${query_format_med_cov_all}'| awk '${awk_expr_med_cov_all}' > medianCoverageAll${region}
+//     fi
+//     """
+//  }
 
- /*
- * STEP - median_coverage_non_miss: Median coverage for fully present genotypes
- */
+//  /*
+//  * STEP - median_coverage_non_miss: Median coverage for fully present genotypes
+//  */
 
-process median_coverage_non_miss {
-    publishDir "${params.outdir}/medianCoverageNonMiss/", mode: params.publish_dir_mode
+// process median_coverage_non_miss {
+//     publishDir "${params.outdir}/medianCoverageNonMiss/", mode: params.publish_dir_mode
 
-    input:
-    set val(region), file(bcf), file(index) from ch_bcfs_med_cov_non_miss
-    each file(xy_sample_ids) from ch_xy_sample_id_med_cov_non_miss
-    each file(xx_sample_ids) from ch_xx_sample_id_med_cov_non_miss
+//     input:
+//     set val(region), file(bcf), file(index) from ch_bcfs_med_cov_non_miss
+//     each file(xy_sample_ids) from ch_xy_sample_id_med_cov_non_miss
+//     each file(xx_sample_ids) from ch_xx_sample_id_med_cov_non_miss
 
-    output:
-    file "medianNonMiss_depth_*" into ch_outputs_med_cov_nonmiss
+//     output:
+//     file "medianNonMiss_depth_*" into ch_outputs_med_cov_nonmiss
 
-    script:
+//     script:
 
-    """
-    if [[ $region == *"chrX"* ]] || [[ $region == *"chrY"* ]] ; then
-        bcftools query ${bcf} -f '${query_format_med_cov_nonmisss}' -e '${query_exclude_med_cov_nonmiss}' -S ${xy_sample_ids} | awk '${awk_expr_med_cov_nonmiss}' > medianNonMiss_depth_${region}_XY
-        bcftools query ${bcf} -f '${query_format_med_cov_nonmisss}' -e '${query_exclude_med_cov_nonmiss}' -S ${xx_sample_ids} | awk '${awk_expr_med_cov_nonmiss}' > medianNonMiss_depth_${region}_XX
-    else
-        bcftools query ${bcf} -f '${query_format_med_cov_nonmisss}' -e '${query_exclude_med_cov_nonmiss}' | awk '${awk_expr_med_cov_nonmiss}' > medianNonMiss_depth_${region}
-    fi
-    """
- }
+//     """
+//     if [[ $region == *"chrX"* ]] || [[ $region == *"chrY"* ]] ; then
+//         bcftools query ${bcf} -f '${query_format_med_cov_nonmisss}' -e '${query_exclude_med_cov_nonmiss}' -S ${xy_sample_ids} | awk '${awk_expr_med_cov_nonmiss}' > medianNonMiss_depth_${region}_XY
+//         bcftools query ${bcf} -f '${query_format_med_cov_nonmisss}' -e '${query_exclude_med_cov_nonmiss}' -S ${xx_sample_ids} | awk '${awk_expr_med_cov_nonmiss}' > medianNonMiss_depth_${region}_XX
+//     else
+//         bcftools query ${bcf} -f '${query_format_med_cov_nonmisss}' -e '${query_exclude_med_cov_nonmiss}' | awk '${awk_expr_med_cov_nonmiss}' > medianNonMiss_depth_${region}
+//     fi
+//     """
+//  }
 
- /*
- * STEP - median_gq: Calculate median GQ
- */
-process median_gq {
-    publishDir "${params.outdir}/medianGQ", mode: params.publish_dir_mode
+//  /*
+//  * STEP - median_gq: Calculate median GQ
+//  */
+// process median_gq {
+//     publishDir "${params.outdir}/medianGQ", mode: params.publish_dir_mode
 
-    input:
-    set val(region), file(bcf), file(index) from ch_bcfs_median_gq
-    each file(xy_sample_ids) from ch_xy_sample_id_median_gq
-    each file(xx_sample_ids) from ch_xx_sample_id_median_gq
+//     input:
+//     set val(region), file(bcf), file(index) from ch_bcfs_median_gq
+//     each file(xy_sample_ids) from ch_xy_sample_id_median_gq
+//     each file(xx_sample_ids) from ch_xx_sample_id_median_gq
 
-    output:
-    file "medianGQ_*" into ch_outputs_median_gq
+//     output:
+//     file "medianGQ_*" into ch_outputs_median_gq
 
-    script:
-    """
-    if [[ $region == *"chrX"* ]] || [[ $region == *"chrY"* ]] ; then
-        bcftools query ${bcf} -f '${query_format_median_gq}' -e '${query_exclude_median_gq}' -S ${xy_sample_ids} | awk '${awk_expr_median_gq}'  > medianGQ_${region}_XY
-        bcftools query ${bcf} -f '${query_format_median_gq}' -e '${query_exclude_median_gq}' -S ${xx_sample_ids} | awk '${awk_expr_median_gq}'  > medianGQ_${region}_XX
-    else
-        bcftools query ${bcf} -f '${query_format_median_gq}' -e '${query_exclude_median_gq}' | awk '${awk_expr_median_gq}'  > medianGQ_${region}
-    fi    
-    """
- }
+//     script:
+//     """
+//     if [[ $region == *"chrX"* ]] || [[ $region == *"chrY"* ]] ; then
+//         bcftools query ${bcf} -f '${query_format_median_gq}' -e '${query_exclude_median_gq}' -S ${xy_sample_ids} | awk '${awk_expr_median_gq}'  > medianGQ_${region}_XY
+//         bcftools query ${bcf} -f '${query_format_median_gq}' -e '${query_exclude_median_gq}' -S ${xx_sample_ids} | awk '${awk_expr_median_gq}'  > medianGQ_${region}_XX
+//     else
+//         bcftools query ${bcf} -f '${query_format_median_gq}' -e '${query_exclude_median_gq}' | awk '${awk_expr_median_gq}'  > medianGQ_${region}
+//     fi    
+//     """
+//  }
 
- /*
- * STEP - ab_ratio_p1: AB ratio calculation - number of hets passing binomial test (reads supporting het call)
- */
+//  /*
+//  * STEP - ab_ratio_p1: AB ratio calculation - number of hets passing binomial test (reads supporting het call)
+//  */
 
-process ab_ratio_p1 {
-    publishDir "${params.outdir}/AB_hetPass/", mode: params.publish_dir_mode
+// process ab_ratio_p1 {
+//     publishDir "${params.outdir}/AB_hetPass/", mode: params.publish_dir_mode
 
-    input:
-    set val(region), file(bcf), file(index) from ch_bcfs_ab_ratio_p1
-    each file(xy_sample_ids) from ch_xy_sample_id_ab_ratio_p1
-    each file(xx_sample_ids) from ch_xx_sample_id_ab_ratio_p1
+//     input:
+//     set val(region), file(bcf), file(index) from ch_bcfs_ab_ratio_p1
+//     each file(xy_sample_ids) from ch_xy_sample_id_ab_ratio_p1
+//     each file(xx_sample_ids) from ch_xx_sample_id_ab_ratio_p1
 
-    output:
-    file "*N_hets_passed.txt" into ch_outputs_ab_ratio_p1
+//     output:
+//     file "*N_hets_passed.txt" into ch_outputs_ab_ratio_p1
 
-    script:
+//     script:
 
-    """
-    #We only calculate AB ratio for XX
-    if [[ $region == *"chrX"* ]] || [[ $region == *"chrY"* ]] ; then
-        bcftools query ${bcf} -f '${query_format_ab_ratio_p1}' -S ${xx_sample_ids} -i '${query_include_ab_ratio_1}' | awk '${awk_expr_ab_ratio_1}' > hetPass_${region}_XX
-    else
-        bcftools query ${bcf} -f '${query_format_ab_ratio_p1}' -i ${query_include_ab_ratio_1} | awk '${awk_expr_ab_ratio_1}' > hetPass_${region}
-    fi
-    """
- }
+//     """
+//     #We only calculate AB ratio for XX
+//     if [[ $region == *"chrX"* ]] || [[ $region == *"chrY"* ]] ; then
+//         bcftools query ${bcf} -f '${query_format_ab_ratio_p1}' -S ${xx_sample_ids} -i '${query_include_ab_ratio_1}' | awk '${awk_expr_ab_ratio_1}' > hetPass_${region}_XX
+//     else
+//         bcftools query ${bcf} -f '${query_format_ab_ratio_p1}' -i ${query_include_ab_ratio_1} | awk '${awk_expr_ab_ratio_1}' > hetPass_${region}
+//     fi
+//     """
+//  }
 
- /*
- * STEP - ab_ratio_p2: Number of het GTs for p2 AB ratio
- */
+//  /*
+//  * STEP - ab_ratio_p2: Number of het GTs for p2 AB ratio
+//  */
  
+
+
+
+
 process ab_ratio_p2 {
     publishDir "${params.outdir}/AB_hetAll", mode: params.publish_dir_mode
 
