@@ -304,7 +304,6 @@ process complete_sites {
 
     output:
     set val(region), file("*N_samples.txt") into ch_n_samples_files
-    set val(region), env(n_samples) into ch_n_samples_env_vars
 
     script:
     // if [ ! -f "${resources}/N_samples" ]; then
