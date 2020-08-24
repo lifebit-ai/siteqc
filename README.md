@@ -28,7 +28,7 @@ See [usage docs](docs/usage.md) for all of the available options when running th
 
 ## Documentation
 
-The nf-core/siteqc pipeline comes with documentation about the pipeline which you can read at [https://nf-core/siteqc/docs](https://nf-core/siteqc/docs) or find in the [`docs/` directory](docs).
+The lifebit-ai/siteqc pipeline comes with documentation about the pipeline which you can find in the [`docs/` directory](docs).
 
 ## Credits
 
