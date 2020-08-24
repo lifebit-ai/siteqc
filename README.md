@@ -21,7 +21,7 @@ The pipeline is built using [Nextflow](https://www.nextflow.io), a workflow tool
     <!-- TODO nf-core: Update the example "typical command" below used to run the pipeline -->
 
     ```bash
-    nextflow run nf-core/siteqc -profile <docker/singularity/conda/institute> --input '*_R{1,2}.fastq.gz' --genome GRCh37
+    nextflow run nf-core/siteqc -profile <docker/singularity/conda/institute> --input s3://lifebit-featured-datasets/projects/gel/siteqc/input.csv
     ```
 
 See [usage docs](docs/usage.md) for all of the available options when running the pipeline.
