@@ -155,6 +155,11 @@ ch_xx_sample_id_median_gq,
 ch_xx_sample_id_ab_ratio_p1,
 ch_xx_sample_id_ab_ratio_p2) = ch_xx_sample_id_files.into(8)
 
+// Plink files for mend_err_p* processes
+Channel
+  .fromPath(params.triodata_keep_pheno)
+  .set {ch_triodata_keep_pheno} 
+
 // Header log info
 log.info nfcoreHeader()
 def summary = [:]
@@ -505,11 +510,13 @@ process pull_ac {
 
      input:
      set val(region), file(bcf), file(index) from ch_bcfs_mend_err_p1 
+     each file(triodata_keep_file) from ch_triodata_keep_pheno
 
      output:
      file "*BED_trio_*" into ch_mend_err_p1_plink_files
 
      script:
+     optional_keep_argument = params.triodata_keep_pheno != "s3://lifebit-featured-datasets/projects/gel/siteqc/nodata" ? "--keep ${triodata_keep_file}" : ""
      """
      plink2 --bcf ${bcf} \
      --make-bed \
@@ -519,7 +526,8 @@ process pull_ac {
      --double-id \
      --real-ref-alleles \
      --allow-extra-chr \
-     --out BED_trio_${region}
+     --out BED_trio_${region} \
+     ${optional_keep_argument}
      """
  }
 
