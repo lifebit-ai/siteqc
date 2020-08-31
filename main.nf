@@ -130,7 +130,8 @@ ch_bcfs_med_cov_non_miss,
 ch_bcfs_median_gq,
 ch_bcfs_ab_ratio_p1,
 ch_bcfs_ab_ratio_p2,
-ch_bcfs_pull_ac) = ch_bcfs.into(10)
+ch_bcfs_pull_ac,
+ch_bcfs_mend_err_p1) = ch_bcfs.into(11)
 
 // List with sample ids to include/exclude
 ch_xy_sample_id_files = Channel.fromPath(params.xy_sample_ids, checkIfExists: true)
@@ -495,32 +496,32 @@ process pull_ac {
 //     """
 // }
 
-//  /*
-//  * STEP - mend_err_p1: Create a bed file for the mendel error calcs
-//  */
-// process mend_err_p1 {
-//     publishDir "${params.outdir}/", mode: params.publish_dir_mode
+  /*
+  * STEP - mend_err_p1: Create a bed file for the mendel error calcs
+  */
+ process mend_err_p1 {
+     publishDir "${params.outdir}/MendelErr/", mode: params.publish_dir_mode
+     container = "lifebitai/plink2"
 
-//     input:
-//     file sample_bcf from ch_files_bcf
+     input:
+     set val(region), file(bcf), file(index) from ch_bcfs_mend_err_p1 
 
-//     output:
-//     file "*BED_trio_*" into ch_files_txt
+     output:
+     file "*BED_trio_*" into ch_mend_err_p1_plink_files
 
-//     script:
-//     """
-//     plink2 --bcf ${bcf} \
-//     --keep $triodata.keep \
-//     --make-bed \
-//     --vcf-half-call m \
-//     --set-missing-var-ids @:#,\$r,\$a \
-//     --new-id-max-allele-len 60 missing\
-//     --double-id \
-//     --real-ref-alleles \
-//     --allow-extra-chr \
-//     --out ${out}MendelErr/BED_trio_${i}
-//     """
-// }
+     script:
+     """
+     plink2 --bcf ${bcf} \
+     --make-bed \
+     --set-missing-var-ids ${params.mend_err_p1_rset_missing_var_ids} \
+     --vcf-half-call ${params.mend_err_p1_vcf_half_call} \
+     --new-id-max-allele-len ${params.mend_err_p1_new_id_max_allele_len} \
+     --double-id \
+     --real-ref-alleles \
+     --allow-extra-chr \
+     --out BED_trio_${region}
+     """
+ }
 
 // /*
 //  * STEP - mend_err_p2: Calculate mendelian errors
