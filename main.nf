@@ -160,6 +160,13 @@ Channel
   .fromPath(params.triodata_keep_pheno)
   .set {ch_triodata_keep_pheno} 
 
+Channel
+  .fromPath(params.triodata_fam)
+  .set {ch_triodata_fam}
+
+(ch_mend_err_p2_fam,
+ ch_mend_err_p3_fam) = ch_triodata_fam.into(2)
+
 // Header log info
 log.info nfcoreHeader()
 def summary = [:]
@@ -513,7 +520,12 @@ process pull_ac {
      each file(triodata_keep_file) from ch_triodata_keep_pheno
 
      output:
-     file "*BED_trio_*" into ch_mend_err_p1_plink_files
+     tuple val(region),
+           file("BED_trio_*.bed"),
+           file("BED_trio_*.bim"),
+           file("BED_trio_*.fam"),
+           file("BED_trio_*.log") into ch_mend_err_p1_plink_files
+
 
      script:
      optional_keep_argument = params.triodata_keep_pheno != "s3://lifebit-featured-datasets/projects/gel/siteqc/nodata" ? "--keep ${triodata_keep_file}" : ""
@@ -531,34 +543,32 @@ process pull_ac {
      """
  }
 
-// /*
-//  * STEP - mend_err_p2: Calculate mendelian errors
-//  */
+/*
+ * STEP - mend_err_p2: Calculate mendelian errors
+ */
 
-// process mend_err_p2 {
-//     publishDir "${params.outdir}/", mode: params.publish_dir_mode
+process mend_err_p2 {
+    publishDir "${params.outdir}/MendelErr/", mode: params.publish_dir_mode
 
-//     input:
-//     file predefined_fam from ch_files_gel
-//     file bim from ch_files_bed
+    input:
+    file predefined_fam from ch_mend_err_p2_fam
+    tuple val(region), file(bed), file(bim), file(fam), file(log) from ch_mend_err_p1_plink_files
 
-//     output:
-//     file "*.lmendel" into
-//     file "*.imendel" into
-//     file "*.imendel" into
+    output:
+    file "*.fmendel" into ch_mend_err_p2_plink_files
 
-//     script:
+    script:
 
-//     """
-//     plink --bed ${out}MendelErr/BED_trio_${i}.bed \
-//     --bim ${out}MendelErr/BED_trio_${i}.bim \
-//     --fam $triodata.fam \
-//     --allow-extra-chr \
-//     --allow-no-sex \
-//     --mendel summaries-only \
-//     --out ${out}MendelErr/MendErr_${i}
-//     """
-// }
+    """
+    plink --bed ${bed} \
+    --bim ${bim} \
+    --fam ${predefined_fam} \
+    --allow-extra-chr \
+    --allow-no-sex \
+    --mendel summaries-only \
+    --out MendErr_${region}
+    """
+}
 
 // /*
 //  * STEP - mend_dist: Summary stats and good families for Mendel errors
