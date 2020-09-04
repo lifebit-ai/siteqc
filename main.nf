@@ -570,24 +570,26 @@ process mend_err_p2 {
     """
 }
 
-// /*
-//  * STEP - mend_dist: Summary stats and good families for Mendel errors
-//  */
-// process mend_dist {
-//     publishDir "${params.outdir}/", mode: params.publish_dir_mode
+/*
+ * STEP - mend_dist: Summary stats and good families for Mendel errors
+ */
+process mend_dist {
+    publishDir "${params.outdir}/", mode: params.publish_dir_mode
 
-//     input:
-//     file fmendel_file from ch_fmendel_files
+    input:
+    file (fmendel) from ch_mend_err_p2_plink_files.collect()
 
-//     output:
-//     file "*summary_stats.txt" into ch_files_txt
+    output:
+    file "FamilyWise.summarystats" into ch_mend_dist_out
+    file "MendelFamilies_4SD.fam" into ch_mend_keep_families
+    file "SD_mendel_family.png" into ch_mend_dist_out_plot
 
-//     script:
+    script:
 
-//     """
-//     mendelerror_family_plotting.R ${out}MendelErr
-//     """
-// }
+    """
+    mendelerror_family_plotting.R .
+    """
+}
 
 // /*
 //  * STEP - mend_err_p3: Calculate mendel errors on just good families

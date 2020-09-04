@@ -12,6 +12,16 @@ RUN conda env create --quiet -f /environment.yml && conda clean -a
 # Add conda installation dir to PATH (instead of doing 'conda activate')
 ENV PATH /opt/conda/envs/siteqc-1.0dev/bin:$PATH
 
+# Install stringi R package and the ones that depend on it.
+# (Issue with stringi package from conda that it depends on libicu64 that
+# is not available for Debian 10)
+
+RUN R -e "install.packages('https://cran.r-project.org/src/contrib/Archive/stringi/stringi_1.4.5.tar.gz', repos=NULL, type='source')"
+RUN R -e "install.packages('https://cran.r-project.org/src/contrib/Archive/stringr/stringr_1.3.1.tar.gz', repos=NULL, type='source')"
+RUN R -e "install.packages('https://cran.r-project.org/src/contrib/Archive/plyr/plyr_1.8.5.tar.gz', repos=NULL, type='source')"
+RUN R -e "install.packages('https://cran.r-project.org/src/contrib/Archive/reshape2/reshape2_1.4.3.tar.gz', repos=NULL, type='source')"
+RUN R -e "install.packages('https://cran.r-project.org/src/contrib/Archive/tidyr/tidyr_1.0.2.tar.gz', repos=NULL, type='source')"
+
 # Dump the details of the installed packages to a file for posterity
 RUN conda env export --name nf-core-siteqc-1.0dev > nf-core-siteqc-1.0dev.yml
 
@@ -23,5 +33,4 @@ RUN touch .Renviron
 # Install GAWK
 RUN apt-get update && \
     apt-get install -y \
-                   gawk
-
+                   gawk \
