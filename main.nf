@@ -114,12 +114,21 @@ awk_expr_ab_ratio_1 = params.awk_expr_ab_ratio_1
 // Input list .csv file of tissues to analyse
 // [chr10_52955340_55447336, test_all_chunks_merged_norm_chr10_52955340_55447336.bcf.gz, test_all_chunks_merged_norm_chr10_52955340_55447336.bcf.gz.csi]
 if (params.input.endsWith(".csv")) {
+
   Channel.fromPath(params.input)
                         .ifEmpty { exit 1, "Input .csv list of input tissues not found at ${params.input}. Is the file path correct?" }
                         .splitCsv(sep: ',',  skip: 1)
                         .map { bcf, index -> ['chr'+file(bcf).simpleName.split('_chr').last() , file(bcf), file(index)] }
                         .set { ch_bcfs }
-                        }
+
+  Channel.fromPath(params.input)
+         .ifEmpty { exit 1, "Input .csv list of input tissues not found at ${params.input}. Is the file path correct?" }
+         .splitCsv(sep: ',',  skip: 1)
+         .map { bcf, index -> ['chr'+file(bcf).simpleName.split('_chr').last().split('_').first(),
+                               file("${params.s3_path_1kg_start}" + 'chr'+file(bcf).simpleName.split('_chr').last().split('_').first() + "${params.s3_path_1kg_end}") ] }
+         .set { ch_1kg_archives }
+
+}
 
 (ch_bcfs_start_file, 
 ch_bcfs_miss1, 
@@ -482,31 +491,25 @@ process pull_ac {
     """
  }
 
-//  /*
-//  * STEP - pull_1kg_p3_sites: Pull sites from 1000KGP3
-//  */
-// // TOCHECK: Ok to run once and provide as a resource?
-// process pull_1kg_p3_sites {
-//     publishDir "${params.outdir}/", mode: params.publish_dir_mode
+/*
+ * STEP - pull_1kg_p3_sites: Pull sites from 1000KGP3
+ */
+// TOCHECK: Ok to run once and provide as a resource?
+process pull_1kg_p3_sites {
+    publishDir "${params.outdir}/pull_1000G_files/", mode: params.publish_dir_mode
 
-//     input:
-//     file(1kg_vcfs_archive) from ch_1kg_vcfs_archive
+    input:
+    tuple val(chr), file(vcf_archive) from ch_1kg_archives
 
-//     output:
-//     file "tmp_1kgp${region}.txt" into ..
+    output:
+    tuple val(chr), file("tmp_1kgp_*.txt") into ch_1kg_sites
 
-//     script:
+    script:
 
-//     """
-//     mkdir 1kg_vfs
-//     tar xzvf ${1kg_vcfs_archive} -C 1kg_vfs
-//     chr="${region%%_*}"
-//     kgpin=$(ls -d "/public_data_resources/1000-genomes/20130502_GRCh38/"*.vcf.gz | \
-//     grep ${chr}_ | grep -v genotypes )
-
-//     zcat ${kgpin} | awk '/^##/ {next} { print $1"\t"$2"\t"$4"\t"$5}'  > tmp_1kgp${i}.txt
-//     """
-// }
+    """
+    zcat ${vcf_archive} | awk '${params.awk_expr_pull_1kg_p3_sites}'  > tmp_1kgp_${chr}.txt
+    """
+}
 
   /*
   * STEP - mend_err_p1: Create a bed file for the mendel error calcs
