@@ -554,7 +554,7 @@ process mend_err_p2 {
     publishDir "${params.outdir}/MendelErr/", mode: params.publish_dir_mode
 
     input:
-    file predefined_fam from ch_mend_err_p2_fam
+    each file(predefined_fam) from ch_mend_err_p2_fam
     tuple val(region), file(bed), file(bim), file(fam), file(log) from ch_mend_err_p1_plink_files
 
     output:
