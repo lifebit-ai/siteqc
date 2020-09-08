@@ -527,7 +527,8 @@ process pull_1kg_p3_sites {
            file("BED_trio_*.bed"),
            file("BED_trio_*.bim"),
            file("BED_trio_*.fam"),
-           file("BED_trio_*.log") into ch_mend_err_p1_plink_files
+           file("BED_trio_*.log") into ch_mend_err_p1_plink_files_p2,
+                                       ch_mend_err_p1_plink_files_p3
 
 
      script:
@@ -555,7 +556,7 @@ process mend_err_p2 {
 
     input:
     each file(predefined_fam) from ch_mend_err_p2_fam
-    tuple val(region), file(bed), file(bim), file(fam), file(log) from ch_mend_err_p1_plink_files
+    tuple val(region), file(bed), file(bim), file(fam), file(log) from ch_mend_err_p1_plink_files_p2
 
     output:
     file "*.fmendel" into ch_mend_err_p2_plink_files
@@ -584,7 +585,7 @@ process mend_dist {
 
     output:
     file "FamilyWise.summarystats" into ch_mend_dist_out
-    file "MendelFamilies_4SD.fam" into ch_mend_keep_families
+    file "MendelFamilies_4SD.fam" into ch_mend_dist_keep_families
     file "SD_mendel_family.png" into ch_mend_dist_out_plot
 
     script:
@@ -594,31 +595,33 @@ process mend_dist {
     """
 }
 
-// /*
-//  * STEP - mend_err_p3: Calculate mendel errors on just good families
-//  */
-// process mend_err_p3 {
-//     publishDir "${params.outdir}/", mode: params.publish_dir_mode
+/*
+ * STEP - mend_err_p3: Calculate mendel errors on just good families
+ */
+process mend_err_p3 {
+    publishDir "${params.outdir}/MendelErrSites", mode: params.publish_dir_mode
 
-//     input:
-//     file bed from ch_files_bed
-//     file fam from ch_files_fam
+    input:
+    each file(predefined_fam) from ch_mend_err_p3_fam
+    tuple val(region), file(bed), file(bim), file(fam), file(log) from ch_mend_err_p1_plink_files_p3
+    each file(mend_dist_keep_fam) from ch_mend_dist_keep_families
 
-//     output:
-//     file "*mendel_error_summaries.txt" into ch_files_txt
+    output:
+    file "*" into ch_mend_err_p3_out
 
-//     script:
+    script:
 
-//     """
-//     plink --bed ${out}MendelErr/BED_trio_${i}.bed \
-//     --bim ${out}MendelErr/BED_trio_${i}.bim \
-//     --fam $triodata.fam \
-//     --allow-extra-chr \
-//     --allow-no-sex \
-//     --keep-fam ${out}MendelErr/MendelFamilies_4SD.fam \
-//     --mendel summaries-only --out ${out}MendelErrSites/MendErr_${i}
-//     """
-// }
+    """
+    plink --bed ${bed} \
+    --bim ${bim} \
+    --fam ${predefined_fam} \
+    --allow-extra-chr \
+    --allow-no-sex \
+    --keep-fam ${mend_dist_keep_fam} \
+    --mendel summaries-only \
+    --out MendErr_${region}
+    """
+}
 
 // // NOTE: (Daniel's note) Just before this step is where we want a checklist, that all chunks are completed
 
