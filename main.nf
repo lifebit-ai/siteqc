@@ -577,7 +577,7 @@ process mend_err_p2 {
  * STEP - mend_dist: Summary stats and good families for Mendel errors
  */
 process mend_dist {
-    publishDir "${params.outdir}/", mode: params.publish_dir_mode
+    publishDir "${params.outdir}/Mend_dist/", mode: params.publish_dir_mode
 
     input:
     file (fmendel) from ch_mend_err_p2_plink_files.collect()

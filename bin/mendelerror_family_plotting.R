@@ -25,8 +25,7 @@ fmendel %<>%
 
 #Plot distribution
 summary(fmendel$N) %>%
-  write.csv(file.path(args[1], 'FamilyWise.summarystats'),
-            row.names = F)
+  capture.output(file=file.path(args[1], 'FamilyWise.summarystats'))
 
 sdv <- 4*sd(fmendel$N, na.rm = T)
 mn <- mean(fmendel$N, na.rm = T)
