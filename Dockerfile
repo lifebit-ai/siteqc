@@ -34,3 +34,4 @@ RUN touch .Renviron
 RUN apt-get update && \
     apt-get install -y \
                    gawk \
+                   tabix \
