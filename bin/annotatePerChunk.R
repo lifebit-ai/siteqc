@@ -1,9 +1,12 @@
 #!/usr/bin/env Rscript
 
-
-# Setup -------------------------------------------------------------------
-# all files will be explicilty passed to this script. 
-source("../src_actual/project_setup.R")
+library(data.table)
+library(magrittr)
+library(ggplot2)
+library(dplyr)
+library(reshape2)
+library(tidyr)
+library(stringr)
 
 args <- commandArgs(trailingOnly = T)
 
@@ -57,10 +60,9 @@ cat(final)
 startProc <- function(x){
   dat <- fread(x$start) %>% 
     as_tibble() %>% 
-    mutate(ID = paste0(V1, ":", V2, "-", V3, "/", V4, "-", V5)) %>%
+    mutate(ID = paste0(V1, ":", V2, "-", V3, "/", V4)) %>%
     select(ID, everything()) %>%
-    setNames(c("ID","#CHROM","POS","REF","ALT", "OC_OM")) %>%
-    select(-OC_OM)
+    setNames(c("ID","#CHROM","POS","REF","ALT"))
   return(dat)
 }
 # Start file --------------------------------------------------------------
@@ -339,15 +341,13 @@ standard_filter <- function(dat){
                        medianCovAll >= 10 & 
                        medianGQ >= 15 &
                        completeSites >= 0.5 &
-                       AB_Ratio >= 0.25 & 
-                       phwe_eur >= 10e-6), 
+                       AB_Ratio >= 0.2),
                     "PASS", 'NA'),
            FILTER = ifelse(missingness > 0.05, paste0(FILTER, ':missingness'), FILTER),
            FILTER = ifelse(medianCovAll < 10, paste0(FILTER, ':depth'), FILTER),
            FILTER = ifelse(AB_Ratio < 0.25, paste0(FILTER, ':ABratio'), FILTER),
            FILTER = ifelse(completeSites < 0.5, paste0(FILTER, ':completeGTRatio'), FILTER),
-           FILTER = ifelse(medianGQ < 15, paste0(FILTER, ':GQ'), FILTER),
-           FILTER = ifelse(phwe_eur < 10e-6, paste0(FILTER, ':phwe_eur'), FILTER)) %>%
+           FILTER = ifelse(medianGQ < 15, paste0(FILTER, ':GQ'), FILTER)) %>%
     mutate(FILTER =
              ifelse(grepl('^NA:', FILTER), str_sub(FILTER, 4), FILTER))
   return(dat)
