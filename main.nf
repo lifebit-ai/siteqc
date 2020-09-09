@@ -246,7 +246,7 @@ process start_file {
     each file(xx_sample_ids) from ch_xx_sample_id_start_file
 
     output:
-    file "start_file_*" into ch_template_startfiles
+    tuple val(region), file("start_file_*") into ch_template_startfiles
     // head results/startfiles/start_file_chr10_52955340_55447336 
     // chr10 52955340 A G
     // chr10 52955649 T C
@@ -266,7 +266,7 @@ process start_file {
  * STEP - missingness_1: Count fully missing GTs
  */
 process missingness_1 {
-    publishDir "${params.outdir}/missing2/", mode: params.publish_dir_mode
+    publishDir "${params.outdir}/missing1/", mode: params.publish_dir_mode
 
     input:
     set val(region), file(bcf), file(index) from ch_bcfs_miss1
@@ -274,7 +274,7 @@ process missingness_1 {
     each file(xx_sample_ids) from ch_xx_sample_id_miss1
 
     output:
-    file "missing1_*" into ch_outputs_miss1
+    tuple val(region), file("missing1_*") into ch_outputs_miss1
 
     script:
     """
@@ -299,7 +299,7 @@ process missingness_2 {
     each file(xx_sample_ids) from ch_xx_sample_id_miss2
 
     output:
-    file "missing2_*" into ch_outputs_miss2
+    tuple val(region), file("missing2_*") into ch_outputs_miss2
 
     script:
     """
@@ -350,7 +350,7 @@ process complete_sites {
      each file(xx_sample_ids) from ch_xx_sample_id_med_cov_all
 
      output:
-     file "medianCoverageAll*" into ch_outputs_med_cov_all
+     tuple val(region),file("medianCoverageAll*") into ch_outputs_med_cov_all
 
      script:
      """
@@ -376,7 +376,7 @@ process complete_sites {
      each file(xx_sample_ids) from ch_xx_sample_id_med_cov_non_miss
 
      output:
-     file "medianNonMiss_depth_*" into ch_outputs_med_cov_nonmiss
+     tuple val(region), file("medianNonMiss_depth_*") into ch_outputs_med_cov_nonmiss
 
      script:
 
@@ -402,7 +402,7 @@ process complete_sites {
      each file(xx_sample_ids) from ch_xx_sample_id_median_gq
 
      output:
-     file "medianGQ_*" into ch_outputs_median_gq
+     tuple val(region), file("medianGQ_*") into ch_outputs_median_gq
 
      script:
      """
@@ -428,7 +428,7 @@ process complete_sites {
      each file(xx_sample_ids) from ch_xx_sample_id_ab_ratio_p1
 
      output:
-     file "hetPass_*" into ch_outputs_ab_ratio_p1
+     tuple val(region), file("hetPass_*") into ch_outputs_ab_ratio_p1
 
      script:
 
@@ -459,7 +459,7 @@ process ab_ratio_p2 {
     each file(xx_sample_ids) from ch_xx_sample_id_ab_ratio_p2
 
     output:
-    file "hetAll_*" into ch_outputs_ab_ratio_p2
+    tuple val(region), file("hetAll_*") into ch_outputs_ab_ratio_p2
 
     script:
     """
@@ -477,13 +477,13 @@ process ab_ratio_p2 {
  */
 // TODO: What subfolder do we need to store the files in?
 process pull_ac {
-    publishDir "${params.outdir}//", mode: params.publish_dir_mode
+    publishDir "${params.outdir}/AC_counts/", mode: params.publish_dir_mode
 
     input:
     set val(region), file(bcf), file(index) from ch_bcfs_pull_ac
     
     output:
-    file "*_AC" into ch_outputs_pull_ac
+    tuple val(region), file("*_AC") into ch_outputs_pull_ac
 
     script:
     """
@@ -607,7 +607,7 @@ process mend_err_p3 {
     each file(mend_dist_keep_fam) from ch_mend_dist_keep_families
 
     output:
-    file "*" into ch_mend_err_p3_out
+    tuple val(region), file("MendErr*.lmendel") into ch_mend_err_p3_out
 
     script:
 
@@ -623,39 +623,76 @@ process mend_err_p3 {
     """
 }
 
-// // NOTE: (Daniel's note) Just before this step is where we want a checklist, that all chunks are completed
+// NOTE: (Daniel's note) Just before this step is where we want a checklist, that all chunks are completed
 
-//  /*
-//  * STEP - aggregate_annotation:  Annotate and make pass/fail. If king set to T in env, print subset of cols
-//  */
-// process aggregate_annotation {
-//     publishDir "${params.outdir}/", mode: params.publish_dir_mode
+/*
+* STEP - aggregate_annotation:  Annotate and make pass/fail. If king set to T in env, print subset of cols
+*/
 
-//     input:
-//     file metrics from ch_files_metrics
 
-//     output:
-//     file "*annotated_variants.txt" into ch_files_txt
+// Creating a joined tuple with all files that are needed for aggregate annotation step per input bcf file.
 
-//     script:
-//     """
-//     annotatePerChunk.R \
-//     ${i} \
-//     ${out}startfile/start_file_${i} \
-//     ${out}missing2/missing1_${i} \
-//     ${out}missing2/missing2_${i} \
-//     ${out}medianCoverageAll/medianCoverageAll${i} \
-//     ${out}medianCoverageNonMiss/medianNonMiss_depth_${i} \
-//     ${out}medianGQ/medianGQ_${i} \
-//     ${out}AB_hetAll/hetAll_${i} \
-//     ${out}AB_hetPass/hetPass_${i} \
-//     ${out}MendelErrSites/MendErr_${i}.lmendel \
-//     ${out}Annotation_newtest \
-//     ${resources}/N_samples \
-//     ${out}AC_counts/${i}_AC \
-//     tmp_1kgp${i}.txt
-//     """
-// }
+// All channels (except 1kg) are joined by the very first (0-th) item in tuple, that stores "region" value.
+// This ensures that only files generated from same input bcf file are aggregated together.
+// A file from 1000G ch is added by mapping by chr value, not region. To generate chr value from first
+// channel in the chain - startfiles channel - the chr value is generated with .map operator from region value.
+ch_joined_outputs_to_aggregate =
+   ch_template_startfiles
+         .map { region, startfile -> [region.split('_').first(), region, startfile] }
+         .join(ch_1kg_sites)
+         .map { chr,region,startfile,i1kg -> [region, startfile, i1kg]}
+         .join(ch_outputs_miss1)
+         .join(ch_outputs_miss2)
+         .join(ch_outputs_med_cov_all)
+         .join(ch_outputs_med_cov_nonmiss)
+         .join(ch_outputs_median_gq)
+         .join(ch_outputs_ab_ratio_p2)
+         .join(ch_outputs_ab_ratio_p1)
+         .join(ch_mend_err_p3_out)
+         .join(ch_n_samples_files)
+         .join(ch_outputs_pull_ac)
+
+
+process aggregate_annotation {
+    publishDir "${params.outdir}/Annotation_newtest/", mode: params.publish_dir_mode
+
+    input:
+    tuple val(region),
+          file(startfile),
+          file(one_thousand_g_file),
+          file(miss1),
+          file(miss2),
+          file(medianCoverageAll),
+          file(medianNonMiss),
+          file(medianGQ),
+          file(hetAll),
+          file(hetPass),
+          file(MendErr),
+          file(N_samples),
+          file(AC_counts) from ch_joined_outputs_to_aggregate
+
+    output:
+    file "*annotated_variants.txt" into ch_files_txt
+
+    script:
+    """
+    annotatePerChunk.R \
+    ${region} \
+    ${startfile} \
+    ${miss1} \
+    ${miss2} \
+    ${medianCoverageAll} \
+    ${medianNonMiss} \
+    ${medianGQ} \
+    ${hetAll} \
+    ${hetPass} \
+    ${MendErr} \
+    'Annotation_newtest' \
+    ${N_samples} \
+    ${AC_counts} \
+    ${one_thousand_g_file}
+    """
+}
  
 //  /*
 //  * STEP - sort_compress: Sort and compress site metric data for KING step
