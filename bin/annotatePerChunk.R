@@ -1,9 +1,12 @@
 #!/usr/bin/env Rscript
 
-
-# Setup -------------------------------------------------------------------
-# all files will be explicilty passed to this script. 
-source("../src_actual/project_setup.R")
+library(data.table)
+library(magrittr)
+library(ggplot2)
+library(dplyr)
+library(reshape2)
+library(tidyr)
+library(stringr)
 
 args <- commandArgs(trailingOnly = T)
 
@@ -21,7 +24,8 @@ argList <- c('pos',
              'outdir',
              'nsamp',
              'acCount',
-             'kgp3txt')
+             'kgp3txt',
+             'king')
 
 
 allArgs <- list()
@@ -47,7 +51,7 @@ if(any(grepl('^final$', names(env), ignore.case = F))){
   final <- F
 }
 
-cat(king)
+cat(allArgs$king)
 cat(final)
 ### 
 
@@ -392,7 +396,7 @@ dat[,5:ncol(dat)] %>% summarise_all(list( ~(sum(is.na(.))))) %>%
 # Populate VCF FILTER field -----------------------------------------------
 #This operates in two streams, if it is for king, we are using more stringent
 #filters.
-if(king){
+if(allArgs$king){
   dat %<>% king_parse %>% 
     king_filter()
 } else {
@@ -412,7 +416,7 @@ if(final){
 
 
 #Write data to file
-if(king){
+if(allArgs$king){
   filename <- paste0(allArgs$outdir, '/BCFtools_site_metrics_SUBCOLS', allArgs$pos,'.txt')
   dat %<>% select('#CHROM',
                   'POS',

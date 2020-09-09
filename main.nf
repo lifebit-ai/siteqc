@@ -672,7 +672,7 @@ process aggregate_annotation {
           file(AC_counts) from ch_joined_outputs_to_aggregate
 
     output:
-    file "*annotated_variants.txt" into ch_files_txt
+    file "BCFtools_site_metrics_*.txt" into ch_files_txt
 
     script:
     """
@@ -687,10 +687,11 @@ process aggregate_annotation {
     ${hetAll} \
     ${hetPass} \
     ${MendErr} \
-    'Annotation_newtest' \
+    '.' \
     ${N_samples} \
     ${AC_counts} \
-    ${one_thousand_g_file}
+    ${one_thousand_g_file} \
+    ${params.king}
     """
 }
  
