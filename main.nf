@@ -547,6 +547,11 @@ process pull_1kg_p3_sites {
      """
  }
 
+// CONDITION: if file for mend_err_p3_keep_fam is not provided, run these two processes:
+if (params.mend_err_p3_keep_fam == 's3://lifebit-featured-datasets/projects/gel/siteqc/nodata') {
+
+  log.warn "File specifying families to keep with mend_err_p3 process was not provided. Processes mend_err_p2 and mend_dist will be run for each input bcf/vcf file to determine families to keep that fulfill the 4SD criteria. If you wish to manually specify which families to keep, provide a .fam file with argument --mend_err_p3_keep_fam ."
+
 /*
  * STEP - mend_err_p2: Calculate mendelian errors
  */
@@ -595,16 +600,23 @@ process mend_dist {
     """
 }
 
+}
+
+
 /*
  * STEP - mend_err_p3: Calculate mendel errors on just good families
  */
+
+// Based on if keep-pheno file was provided by user, select appropriate channel
+ch_mend_err_p3_keep_fam = params.mend_err_p3_keep_fam != 's3://lifebit-featured-datasets/projects/gel/siteqc/nodata' ? Channel.fromPath("$params.mend_err_p3_keep_fam") : ch_mend_dist_keep_families
+
 process mend_err_p3 {
     publishDir "${params.outdir}/MendelErrSites", mode: params.publish_dir_mode
 
     input:
     each file(predefined_fam) from ch_mend_err_p3_fam
     tuple val(region), file(bed), file(bim), file(fam), file(log) from ch_mend_err_p1_plink_files_p3
-    each file(mend_dist_keep_fam) from ch_mend_dist_keep_families
+    each file(keep_fam) from ch_mend_err_p3_keep_fam
 
     output:
     tuple val(region), file("MendErr*.lmendel") into ch_mend_err_p3_out
@@ -617,7 +629,7 @@ process mend_err_p3 {
     --fam ${predefined_fam} \
     --allow-extra-chr \
     --allow-no-sex \
-    --keep-fam ${mend_dist_keep_fam} \
+    --keep-fam ${keep_fam} \
     --mendel summaries-only \
     --out MendErr_${region}
     """
