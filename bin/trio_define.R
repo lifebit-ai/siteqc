@@ -44,8 +44,8 @@ prep_fam <- function(dat, extendedTrio = F){
                  #From here pad the PAT_p and MAT_p so proband info is filled,
                  #and then revert the data to 0 in mother and father
                  group_by(family_id) %>% 
-                 tidyr::fill(PAT_p, .direction = 'up') %>%
-                 tidyr::fill(MAT_p, .direction = 'up') %>%
+                 tidyr::fill(PAT_p, .direction = 'updown') %>%
+                 tidyr::fill(MAT_p, .direction = 'updown') %>%
                  mutate(PAT_p = 
                           ifelse(trio %in% c('Father', 'Mother'),
                                  as.character(0), PAT_p),
@@ -64,7 +64,7 @@ prep_fam <- function(dat, extendedTrio = F){
     )
   tmp <- tmp[[1]] %>% 
     group_by(family_id) %>% 
-    filter(n() > 2) %>%
+    dplyr::filter(n() > 2) %>%
     ungroup()#we don't want duos, but we want to be more specific in 
   #filtering trios
   if(!extendedTrio){
@@ -77,7 +77,7 @@ prep_fam <- function(dat, extendedTrio = F){
       arrange(family_id, offspring, isProband) %>% 
       distinct(family_id, offspring, .keep_all = T ) %>%
       group_by(family_id) %>%
-      filter(n() > 2) %>% #we have to do this again because we may have trios that 
+      dplyr::filter(n() > 2) %>% #we have to do this again because we may have trios that 
     #were composed of parent offspring offpspring, so will now be duo
       select(-offspring, -isProband) %>%
       ungroup()
@@ -116,7 +116,7 @@ cat('Dimensions post filtering based on aggregate membership: ', dim(dat), '\n')
 #Only keep whole trios
 dat %<>% 
   group_by(family_id) %>%
-  filter(n() > 2) %>%
+  dplyr::filter(n() > 2) %>%
   ungroup()
 cat('Dimensions post filtering to complete trios: ', dim(dat), '\n')
 
