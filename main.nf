@@ -114,12 +114,21 @@ awk_expr_ab_ratio_1 = params.awk_expr_ab_ratio_1
 // Input list .csv file of tissues to analyse
 // [chr10_52955340_55447336, test_all_chunks_merged_norm_chr10_52955340_55447336.bcf.gz, test_all_chunks_merged_norm_chr10_52955340_55447336.bcf.gz.csi]
 if (params.input.endsWith(".csv")) {
+
   Channel.fromPath(params.input)
                         .ifEmpty { exit 1, "Input .csv list of input tissues not found at ${params.input}. Is the file path correct?" }
                         .splitCsv(sep: ',',  skip: 1)
                         .map { bcf, index -> ['chr'+file(bcf).simpleName.split('_chr').last() , file(bcf), file(index)] }
                         .set { ch_bcfs }
-                        }
+
+  Channel.fromPath(params.input)
+         .ifEmpty { exit 1, "Input .csv list of input tissues not found at ${params.input}. Is the file path correct?" }
+         .splitCsv(sep: ',',  skip: 1)
+         .map { bcf, index -> ['chr'+file(bcf).simpleName.split('_chr').last().split('_').first(),
+                               file("${params.s3_path_1kg_start}" + 'chr'+file(bcf).simpleName.split('_chr').last().split('_').first() + "${params.s3_path_1kg_end}") ] }
+         .set { ch_1kg_archives }
+
+}
 
 (ch_bcfs_start_file, 
 ch_bcfs_miss1, 
@@ -130,7 +139,8 @@ ch_bcfs_med_cov_non_miss,
 ch_bcfs_median_gq,
 ch_bcfs_ab_ratio_p1,
 ch_bcfs_ab_ratio_p2,
-ch_bcfs_pull_ac) = ch_bcfs.into(10)
+ch_bcfs_pull_ac,
+ch_bcfs_mend_err_p1) = ch_bcfs.into(11)
 
 // List with sample ids to include/exclude
 ch_xy_sample_id_files = Channel.fromPath(params.xy_sample_ids, checkIfExists: true)
@@ -153,6 +163,18 @@ ch_xx_sample_id_med_cov_non_miss,
 ch_xx_sample_id_median_gq,
 ch_xx_sample_id_ab_ratio_p1,
 ch_xx_sample_id_ab_ratio_p2) = ch_xx_sample_id_files.into(8)
+
+// Plink files for mend_err_p* processes
+Channel
+  .fromPath(params.triodata_keep_pheno)
+  .set {ch_triodata_keep_pheno} 
+
+Channel
+  .fromPath(params.triodata_fam)
+  .set {ch_triodata_fam}
+
+(ch_mend_err_p2_fam,
+ ch_mend_err_p3_fam) = ch_triodata_fam.into(2)
 
 // Header log info
 log.info nfcoreHeader()
@@ -224,7 +246,7 @@ process start_file {
     each file(xx_sample_ids) from ch_xx_sample_id_start_file
 
     output:
-    file "start_file_*" into ch_template_startfiles
+    tuple val(region), file("start_file_*") into ch_template_startfiles
     // head results/startfiles/start_file_chr10_52955340_55447336 
     // chr10 52955340 A G
     // chr10 52955649 T C
@@ -244,7 +266,7 @@ process start_file {
  * STEP - missingness_1: Count fully missing GTs
  */
 process missingness_1 {
-    publishDir "${params.outdir}/missing2/", mode: params.publish_dir_mode
+    publishDir "${params.outdir}/missing1/", mode: params.publish_dir_mode
 
     input:
     set val(region), file(bcf), file(index) from ch_bcfs_miss1
@@ -252,7 +274,7 @@ process missingness_1 {
     each file(xx_sample_ids) from ch_xx_sample_id_miss1
 
     output:
-    file "missing1_*" into ch_outputs_miss1
+    tuple val(region), file("missing1_*") into ch_outputs_miss1
 
     script:
     """
@@ -277,7 +299,7 @@ process missingness_2 {
     each file(xx_sample_ids) from ch_xx_sample_id_miss2
 
     output:
-    file "missing2_*" into ch_outputs_miss2
+    tuple val(region), file("missing2_*") into ch_outputs_miss2
 
     script:
     """
@@ -319,106 +341,106 @@ process complete_sites {
  * STEP - median_coverage_all: Produce median value for depth across all GT
  */
 
-// process median_coverage_all {
-//     publishDir "${params.outdir}/median_coverage_all/", mode: params.publish_dir_mode
+ process median_coverage_all {
+     publishDir "${params.outdir}/median_coverage_all/", mode: params.publish_dir_mode
 
-//     input:
-//     set val(region), file(bcf), file(index) from ch_bcfs_med_cov_all
-//     each file(xy_sample_ids) from ch_xy_sample_id_med_cov_all
-//     each file(xx_sample_ids) from ch_xx_sample_id_med_cov_all
+     input:
+     set val(region), file(bcf), file(index) from ch_bcfs_med_cov_all
+     each file(xy_sample_ids) from ch_xy_sample_id_med_cov_all
+     each file(xx_sample_ids) from ch_xx_sample_id_med_cov_all
 
-//     output:
-//     file "medianCoverageAll*" into ch_outputs_med_cov_all
+     output:
+     tuple val(region),file("medianCoverageAll*") into ch_outputs_med_cov_all
 
-//     script:
-//     """
-//     if [[ $region == *"chrX"* ]] || [[ $region == *"chrY"* ]] ; then
-//         bcftools query ${bcf} -f '${query_format_med_cov_all}' -S ${xy_sample_ids} | awk '${awk_expr_med_cov_all}' > medianCoverageAll${region}_XY
-//         bcftools query ${bcf} -f '${query_format_med_cov_all}' -S ${xy_sample_ids} | awk '${awk_expr_med_cov_all}' > medianCoverageAll${region}_XX 
-//     else
-//         bcftools query ${bcf} -f '${query_format_med_cov_all}'| awk '${awk_expr_med_cov_all}' > medianCoverageAll${region}
-//     fi
-//     """
-//  }
+     script:
+     """
+     if [[ $region == *"chrX"* ]] || [[ $region == *"chrY"* ]] ; then
+         bcftools query ${bcf} -f '${query_format_med_cov_all}' -S ${xy_sample_ids} | awk '${awk_expr_med_cov_all}' > medianCoverageAll${region}_XY
+         bcftools query ${bcf} -f '${query_format_med_cov_all}' -S ${xy_sample_ids} | awk '${awk_expr_med_cov_all}' > medianCoverageAll${region}_XX 
+     else
+         bcftools query ${bcf} -f '${query_format_med_cov_all}'| awk '${awk_expr_med_cov_all}' > medianCoverageAll${region}
+     fi
+     """
+  }
 
 //  /*
 //  * STEP - median_coverage_non_miss: Median coverage for fully present genotypes
 //  */
 
-// process median_coverage_non_miss {
-//     publishDir "${params.outdir}/medianCoverageNonMiss/", mode: params.publish_dir_mode
+ process median_coverage_non_miss {
+     publishDir "${params.outdir}/medianCoverageNonMiss/", mode: params.publish_dir_mode
 
-//     input:
-//     set val(region), file(bcf), file(index) from ch_bcfs_med_cov_non_miss
-//     each file(xy_sample_ids) from ch_xy_sample_id_med_cov_non_miss
-//     each file(xx_sample_ids) from ch_xx_sample_id_med_cov_non_miss
+     input:
+     set val(region), file(bcf), file(index) from ch_bcfs_med_cov_non_miss
+     each file(xy_sample_ids) from ch_xy_sample_id_med_cov_non_miss
+     each file(xx_sample_ids) from ch_xx_sample_id_med_cov_non_miss
 
-//     output:
-//     file "medianNonMiss_depth_*" into ch_outputs_med_cov_nonmiss
+     output:
+     tuple val(region), file("medianNonMiss_depth_*") into ch_outputs_med_cov_nonmiss
 
-//     script:
+     script:
 
-//     """
-//     if [[ $region == *"chrX"* ]] || [[ $region == *"chrY"* ]] ; then
-//         bcftools query ${bcf} -f '${query_format_med_cov_nonmisss}' -e '${query_exclude_med_cov_nonmiss}' -S ${xy_sample_ids} | awk '${awk_expr_med_cov_nonmiss}' > medianNonMiss_depth_${region}_XY
-//         bcftools query ${bcf} -f '${query_format_med_cov_nonmisss}' -e '${query_exclude_med_cov_nonmiss}' -S ${xx_sample_ids} | awk '${awk_expr_med_cov_nonmiss}' > medianNonMiss_depth_${region}_XX
-//     else
-//         bcftools query ${bcf} -f '${query_format_med_cov_nonmisss}' -e '${query_exclude_med_cov_nonmiss}' | awk '${awk_expr_med_cov_nonmiss}' > medianNonMiss_depth_${region}
-//     fi
-//     """
-//  }
+     """
+     if [[ $region == *"chrX"* ]] || [[ $region == *"chrY"* ]] ; then
+         bcftools query ${bcf} -f '${query_format_med_cov_nonmisss}' -e '${query_exclude_med_cov_nonmiss}' -S ${xy_sample_ids} | awk '${awk_expr_med_cov_nonmiss}' > medianNonMiss_depth_${region}_XY
+         bcftools query ${bcf} -f '${query_format_med_cov_nonmisss}' -e '${query_exclude_med_cov_nonmiss}' -S ${xx_sample_ids} | awk '${awk_expr_med_cov_nonmiss}' > medianNonMiss_depth_${region}_XX
+     else
+         bcftools query ${bcf} -f '${query_format_med_cov_nonmisss}' -e '${query_exclude_med_cov_nonmiss}' | awk '${awk_expr_med_cov_nonmiss}' > medianNonMiss_depth_${region}
+     fi
+     """
+  }
 
 //  /*
 //  * STEP - median_gq: Calculate median GQ
 //  */
-// process median_gq {
-//     publishDir "${params.outdir}/medianGQ", mode: params.publish_dir_mode
+ process median_gq {
+     publishDir "${params.outdir}/medianGQ", mode: params.publish_dir_mode
 
-//     input:
-//     set val(region), file(bcf), file(index) from ch_bcfs_median_gq
-//     each file(xy_sample_ids) from ch_xy_sample_id_median_gq
-//     each file(xx_sample_ids) from ch_xx_sample_id_median_gq
+     input:
+     set val(region), file(bcf), file(index) from ch_bcfs_median_gq
+     each file(xy_sample_ids) from ch_xy_sample_id_median_gq
+     each file(xx_sample_ids) from ch_xx_sample_id_median_gq
 
-//     output:
-//     file "medianGQ_*" into ch_outputs_median_gq
+     output:
+     tuple val(region), file("medianGQ_*") into ch_outputs_median_gq
 
-//     script:
-//     """
-//     if [[ $region == *"chrX"* ]] || [[ $region == *"chrY"* ]] ; then
-//         bcftools query ${bcf} -f '${query_format_median_gq}' -e '${query_exclude_median_gq}' -S ${xy_sample_ids} | awk '${awk_expr_median_gq}'  > medianGQ_${region}_XY
-//         bcftools query ${bcf} -f '${query_format_median_gq}' -e '${query_exclude_median_gq}' -S ${xx_sample_ids} | awk '${awk_expr_median_gq}'  > medianGQ_${region}_XX
-//     else
-//         bcftools query ${bcf} -f '${query_format_median_gq}' -e '${query_exclude_median_gq}' | awk '${awk_expr_median_gq}'  > medianGQ_${region}
-//     fi    
-//     """
-//  }
+     script:
+     """
+     if [[ $region == *"chrX"* ]] || [[ $region == *"chrY"* ]] ; then
+         bcftools query ${bcf} -f '${query_format_median_gq}' -e '${query_exclude_median_gq}' -S ${xy_sample_ids} | awk '${awk_expr_median_gq}'  > medianGQ_${region}_XY
+         bcftools query ${bcf} -f '${query_format_median_gq}' -e '${query_exclude_median_gq}' -S ${xx_sample_ids} | awk '${awk_expr_median_gq}'  > medianGQ_${region}_XX
+     else
+         bcftools query ${bcf} -f '${query_format_median_gq}' -e '${query_exclude_median_gq}' | awk '${awk_expr_median_gq}'  > medianGQ_${region}
+     fi
+     """
+  }
 
 //  /*
 //  * STEP - ab_ratio_p1: AB ratio calculation - number of hets passing binomial test (reads supporting het call)
 //  */
 
-// process ab_ratio_p1 {
-//     publishDir "${params.outdir}/AB_hetPass/", mode: params.publish_dir_mode
+ process ab_ratio_p1 {
+     publishDir "${params.outdir}/AB_hetPass/", mode: params.publish_dir_mode
 
-//     input:
-//     set val(region), file(bcf), file(index) from ch_bcfs_ab_ratio_p1
-//     each file(xy_sample_ids) from ch_xy_sample_id_ab_ratio_p1
-//     each file(xx_sample_ids) from ch_xx_sample_id_ab_ratio_p1
+     input:
+     set val(region), file(bcf), file(index) from ch_bcfs_ab_ratio_p1
+     each file(xy_sample_ids) from ch_xy_sample_id_ab_ratio_p1
+     each file(xx_sample_ids) from ch_xx_sample_id_ab_ratio_p1
 
-//     output:
-//     file "*N_hets_passed.txt" into ch_outputs_ab_ratio_p1
+     output:
+     tuple val(region), file("hetPass_*") into ch_outputs_ab_ratio_p1
 
-//     script:
+     script:
 
-//     """
-//     #We only calculate AB ratio for XX
-//     if [[ $region == *"chrX"* ]] || [[ $region == *"chrY"* ]] ; then
-//         bcftools query ${bcf} -f '${query_format_ab_ratio_p1}' -S ${xx_sample_ids} -i '${query_include_ab_ratio_1}' | awk '${awk_expr_ab_ratio_1}' > hetPass_${region}_XX
-//     else
-//         bcftools query ${bcf} -f '${query_format_ab_ratio_p1}' -i ${query_include_ab_ratio_1} | awk '${awk_expr_ab_ratio_1}' > hetPass_${region}
-//     fi
-//     """
-//  }
+     """
+     #We only calculate AB ratio for XX
+     if [[ $region == *"chrX"* ]] || [[ $region == *"chrY"* ]] ; then
+         bcftools query ${bcf} -f '${query_format_ab_ratio_p1}' -S ${xx_sample_ids} -i '${query_include_ab_ratio_1}' | awk '${awk_expr_ab_ratio_1}' > hetPass_${region}_XX
+     else
+         bcftools query ${bcf} -f '${query_format_ab_ratio_p1}' -i '${query_include_ab_ratio_1}' | awk '${awk_expr_ab_ratio_1}' > hetPass_${region}
+     fi
+     """
+  }
 
 //  /*
 //  * STEP - ab_ratio_p2: Number of het GTs for p2 AB ratio
@@ -437,7 +459,7 @@ process ab_ratio_p2 {
     each file(xx_sample_ids) from ch_xx_sample_id_ab_ratio_p2
 
     output:
-    file "hetAll_*" into ch_outputs_ab_ratio_p2
+    tuple val(region), file("hetAll_*") into ch_outputs_ab_ratio_p2
 
     script:
     """
@@ -455,13 +477,13 @@ process ab_ratio_p2 {
  */
 // TODO: What subfolder do we need to store the files in?
 process pull_ac {
-    publishDir "${params.outdir}//", mode: params.publish_dir_mode
+    publishDir "${params.outdir}/AC_counts/", mode: params.publish_dir_mode
 
     input:
     set val(region), file(bcf), file(index) from ch_bcfs_pull_ac
     
     output:
-    file "*_AC" into ch_outputs_pull_ac
+    tuple val(region), file("*_AC") into ch_outputs_pull_ac
 
     script:
     """
@@ -469,166 +491,209 @@ process pull_ac {
     """
  }
 
-//  /*
-//  * STEP - pull_1kg_p3_sites: Pull sites from 1000KGP3
-//  */
-// // TOCHECK: Ok to run once and provide as a resource?
-// process pull_1kg_p3_sites {
-//     publishDir "${params.outdir}/", mode: params.publish_dir_mode
-    
-//     input:
-//     file(1kg_vcfs_archive) from ch_1kg_vcfs_archive
-    
-//     output:
-//     file "tmp_1kgp${region}.txt" into ..
+/*
+ * STEP - pull_1kg_p3_sites: Pull sites from 1000KGP3
+ */
+// TOCHECK: Ok to run once and provide as a resource?
+process pull_1kg_p3_sites {
+    publishDir "${params.outdir}/pull_1000G_files/", mode: params.publish_dir_mode
 
-//     script:
+    input:
+    tuple val(chr), file(vcf_archive) from ch_1kg_archives
 
-//     """
-//     mkdir 1kg_vfs
-//     tar xzvf ${1kg_vcfs_archive} -C 1kg_vfs
-//     chr="${region%%_*}"
-//     kgpin=$(ls -d "/public_data_resources/1000-genomes/20130502_GRCh38/"*.vcf.gz | \
-//     grep ${chr}_ | grep -v genotypes )
+    output:
+    tuple val(chr), file("tmp_1kgp_*.txt") into ch_1kg_sites
 
-//     zcat ${kgpin} | awk '/^##/ {next} { print $1"\t"$2"\t"$4"\t"$5}'  > tmp_1kgp${i}.txt
-//     """
-// }
+    script:
 
-//  /*
-//  * STEP - mend_err_p1: Create a bed file for the mendel error calcs
-//  */
-// process mend_err_p1 {
-//     publishDir "${params.outdir}/", mode: params.publish_dir_mode
+    """
+    zcat ${vcf_archive} | awk '${params.awk_expr_pull_1kg_p3_sites}'  > tmp_1kgp_${chr}.txt
+    """
+}
 
-//     input:
-//     file sample_bcf from ch_files_bcf
+  /*
+  * STEP - mend_err_p1: Create a bed file for the mendel error calcs
+  */
+ process mend_err_p1 {
+     publishDir "${params.outdir}/MendelErr/", mode: params.publish_dir_mode
+     container = "lifebitai/plink2"
 
-//     output:
-//     file "*BED_trio_*" into ch_files_txt
+     input:
+     set val(region), file(bcf), file(index) from ch_bcfs_mend_err_p1 
+     each file(triodata_keep_file) from ch_triodata_keep_pheno
 
-//     script:
-//     """
-//     plink2 --bcf ${bcf} \
-//     --keep $triodata.keep \
-//     --make-bed \
-//     --vcf-half-call m \
-//     --set-missing-var-ids @:#,\$r,\$a \
-//     --new-id-max-allele-len 60 missing\
-//     --double-id \
-//     --real-ref-alleles \
-//     --allow-extra-chr \
-//     --out ${out}MendelErr/BED_trio_${i}
-//     """
-// }
+     output:
+     tuple val(region),
+           file("BED_trio_*.bed"),
+           file("BED_trio_*.bim"),
+           file("BED_trio_*.fam"),
+           file("BED_trio_*.log") into ch_mend_err_p1_plink_files_p2,
+                                       ch_mend_err_p1_plink_files_p3
 
-// /*
-//  * STEP - mend_err_p2: Calculate mendelian errors
-//  */
 
-// process mend_err_p2 {
-//     publishDir "${params.outdir}/", mode: params.publish_dir_mode
+     script:
+     optional_keep_argument = params.triodata_keep_pheno != "s3://lifebit-featured-datasets/projects/gel/siteqc/nodata" ? "--keep ${triodata_keep_file}" : ""
+     """
+     plink2 --bcf ${bcf} \
+     --make-bed \
+     --set-missing-var-ids ${params.mend_err_p1_rset_missing_var_ids} \
+     --vcf-half-call ${params.mend_err_p1_vcf_half_call} \
+     --new-id-max-allele-len ${params.mend_err_p1_new_id_max_allele_len} \
+     --double-id \
+     --real-ref-alleles \
+     --allow-extra-chr \
+     --out BED_trio_${region} \
+     ${optional_keep_argument}
+     """
+ }
 
-//     input:
-//     file predefined_fam from ch_files_gel
-//     file bim from ch_files_bed
+/*
+ * STEP - mend_err_p2: Calculate mendelian errors
+ */
 
-//     output:
-//     file "*.lmendel" into
-//     file "*.imendel" into
-//     file "*.imendel" into
+process mend_err_p2 {
+    publishDir "${params.outdir}/MendelErr/", mode: params.publish_dir_mode
 
-//     script:
+    input:
+    each file(predefined_fam) from ch_mend_err_p2_fam
+    tuple val(region), file(bed), file(bim), file(fam), file(log) from ch_mend_err_p1_plink_files_p2
 
-//     """
-//     plink --bed ${out}MendelErr/BED_trio_${i}.bed \
-//     --bim ${out}MendelErr/BED_trio_${i}.bim \
-//     --fam $triodata.fam \
-//     --allow-extra-chr \
-//     --allow-no-sex \
-//     --mendel summaries-only \
-//     --out ${out}MendelErr/MendErr_${i}
-//     """
-// }
+    output:
+    file "*.fmendel" into ch_mend_err_p2_plink_files
 
-// /*
-//  * STEP - mend_dist: Summary stats and good families for Mendel errors
-//  */
-// process mend_dist {
-//     publishDir "${params.outdir}/", mode: params.publish_dir_mode
+    script:
 
-//     input:
-//     file fmendel_file from ch_fmendel_files
+    """
+    plink --bed ${bed} \
+    --bim ${bim} \
+    --fam ${predefined_fam} \
+    --allow-extra-chr \
+    --allow-no-sex \
+    --mendel summaries-only \
+    --out MendErr_${region}
+    """
+}
 
-//     output:
-//     file "*summary_stats.txt" into ch_files_txt
+/*
+ * STEP - mend_dist: Summary stats and good families for Mendel errors
+ */
+process mend_dist {
+    publishDir "${params.outdir}/Mend_dist/", mode: params.publish_dir_mode
 
-//     script:
+    input:
+    file (fmendel) from ch_mend_err_p2_plink_files.collect()
 
-//     """
-//     mendelerror_family_plotting.R ${out}MendelErr
-//     """
-// }
+    output:
+    file "FamilyWise.summarystats" into ch_mend_dist_out
+    file "MendelFamilies_4SD.fam" into ch_mend_dist_keep_families
+    file "SD_mendel_family.png" into ch_mend_dist_out_plot
 
-// /*
-//  * STEP - mend_err_p3: Calculate mendel errors on just good families
-//  */
-// process mend_err_p3 {
-//     publishDir "${params.outdir}/", mode: params.publish_dir_mode
+    script:
 
-//     input:
-//     file bed from ch_files_bed
-//     file fam from ch_files_fam
+    """
+    mendelerror_family_plotting.R .
+    """
+}
 
-//     output:
-//     file "*mendel_error_summaries.txt" into ch_files_txt
+/*
+ * STEP - mend_err_p3: Calculate mendel errors on just good families
+ */
+process mend_err_p3 {
+    publishDir "${params.outdir}/MendelErrSites", mode: params.publish_dir_mode
 
-//     script:
+    input:
+    each file(predefined_fam) from ch_mend_err_p3_fam
+    tuple val(region), file(bed), file(bim), file(fam), file(log) from ch_mend_err_p1_plink_files_p3
+    each file(mend_dist_keep_fam) from ch_mend_dist_keep_families
 
-//     """
-//     plink --bed ${out}MendelErr/BED_trio_${i}.bed \
-//     --bim ${out}MendelErr/BED_trio_${i}.bim \
-//     --fam $triodata.fam \
-//     --allow-extra-chr \
-//     --allow-no-sex \
-//     --keep-fam ${out}MendelErr/MendelFamilies_4SD.fam \
-//     --mendel summaries-only --out ${out}MendelErrSites/MendErr_${i}
-//     """
-// }
+    output:
+    tuple val(region), file("MendErr*.lmendel") into ch_mend_err_p3_out
 
-// // NOTE: (Daniel's note) Just before this step is where we want a checklist, that all chunks are completed
+    script:
 
-//  /*
-//  * STEP - aggregate_annotation:  Annotate and make pass/fail. If king set to T in env, print subset of cols
-//  */
-// process aggregate_annotation {
-//     publishDir "${params.outdir}/", mode: params.publish_dir_mode
+    """
+    plink --bed ${bed} \
+    --bim ${bim} \
+    --fam ${predefined_fam} \
+    --allow-extra-chr \
+    --allow-no-sex \
+    --keep-fam ${mend_dist_keep_fam} \
+    --mendel summaries-only \
+    --out MendErr_${region}
+    """
+}
 
-//     input:
-//     file metrics from ch_files_metrics
+// NOTE: (Daniel's note) Just before this step is where we want a checklist, that all chunks are completed
 
-//     output:
-//     file "*annotated_variants.txt" into ch_files_txt
+/*
+* STEP - aggregate_annotation:  Annotate and make pass/fail. If king set to T in env, print subset of cols
+*/
 
-//     script:
-//     """
-//     annotatePerChunk.R \
-//     ${i} \
-//     ${out}startfile/start_file_${i} \
-//     ${out}missing2/missing1_${i} \
-//     ${out}missing2/missing2_${i} \
-//     ${out}medianCoverageAll/medianCoverageAll${i} \
-//     ${out}medianCoverageNonMiss/medianNonMiss_depth_${i} \
-//     ${out}medianGQ/medianGQ_${i} \
-//     ${out}AB_hetAll/hetAll_${i} \
-//     ${out}AB_hetPass/hetPass_${i} \
-//     ${out}MendelErrSites/MendErr_${i}.lmendel \
-//     ${out}Annotation_newtest \
-//     ${resources}/N_samples \
-//     ${out}AC_counts/${i}_AC \
-//     tmp_1kgp${i}.txt
-//     """
-// }
+
+// Creating a joined tuple with all files that are needed for aggregate annotation step per input bcf file.
+
+// All channels (except 1kg) are joined by the very first (0-th) item in tuple, that stores "region" value.
+// This ensures that only files generated from same input bcf file are aggregated together.
+// A file from 1000G ch is added by mapping by chr value, not region. To generate chr value from first
+// channel in the chain - startfiles channel - the chr value is generated with .map operator from region value.
+ch_joined_outputs_to_aggregate =
+   ch_template_startfiles
+         .map { region, startfile -> [region.split('_').first(), region, startfile] }
+         .join(ch_1kg_sites)
+         .map { chr,region,startfile,i1kg -> [region, startfile, i1kg]}
+         .join(ch_outputs_miss1)
+         .join(ch_outputs_miss2)
+         .join(ch_outputs_med_cov_all)
+         .join(ch_outputs_med_cov_nonmiss)
+         .join(ch_outputs_median_gq)
+         .join(ch_outputs_ab_ratio_p2)
+         .join(ch_outputs_ab_ratio_p1)
+         .join(ch_mend_err_p3_out)
+         .join(ch_n_samples_files)
+         .join(ch_outputs_pull_ac)
+
+
+process aggregate_annotation {
+    publishDir "${params.outdir}/Annotation_newtest/", mode: params.publish_dir_mode
+
+    input:
+    tuple val(region),
+          file(startfile),
+          file(one_thousand_g_file),
+          file(miss1),
+          file(miss2),
+          file(medianCoverageAll),
+          file(medianNonMiss),
+          file(medianGQ),
+          file(hetAll),
+          file(hetPass),
+          file(MendErr),
+          file(N_samples),
+          file(AC_counts) from ch_joined_outputs_to_aggregate
+
+    output:
+    file "BCFtools_site_metrics_*.txt" into ch_files_txt
+
+    script:
+    """
+    annotatePerChunk.R \
+    ${region} \
+    ${startfile} \
+    ${miss1} \
+    ${miss2} \
+    ${medianCoverageAll} \
+    ${medianNonMiss} \
+    ${medianGQ} \
+    ${hetAll} \
+    ${hetPass} \
+    ${MendErr} \
+    '.' \
+    ${N_samples} \
+    ${AC_counts} \
+    ${one_thousand_g_file} \
+    ${params.king}
+    """
+}
  
 //  /*
 //  * STEP - sort_compress: Sort and compress site metric data for KING step

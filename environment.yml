@@ -16,3 +16,7 @@ dependencies:
   - vcftools=0.1.15
   - bcftools=1.10.2
   - plink=1.90b6.12
+  - conda-forge:r-data.table=1.12.8
+  - conda-forge:r-magrittr=1.5
+  - conda-forge:r-ggplot2=3.3.0
+  - conda-forge:r-dplyr=0.8.5
