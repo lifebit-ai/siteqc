@@ -1,5 +1,6 @@
-cat('Dimensions post filtering based on aggregate membership: ', dim(dat), '\n')
-r: daniel 
+#!/usr/bin/env Rscript
+
+# @Author: daniel 
 # @Date: 2019-11-08T10:44:09+00:00
 # @Email:daniel.rhodes@genomicsengland.co.uk
 # @Project: Aggregate_QC  
