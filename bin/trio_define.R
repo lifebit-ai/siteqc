@@ -16,11 +16,18 @@
 args <- commandArgs(trailingOnly = T)
 input <- as.character(args[1])
 inaggregate <- as.character(args[2])
-famout <- as.character(args[3])
-keepout <- as.character(args[4])
+updfile <- as.character(args[3])
+famout <- as.character(args[4])
+keepout <- as.character(args[5])
 #Or locally
 #setwd('Documents/AggregateVCF/variant_QC/GEL/Data/')
-source("../src/project_setup.R")
+library(data.table)
+library(magrittr)
+library(ggplot2)
+library(dplyr)
+library(reshape2)
+library(tidyr)
+library(stringr)
 ### 
 
 
@@ -105,7 +112,6 @@ cat('Assumes stable file naming convention to pull platekey\n')
 cat('Filtering out UPD cases. Check that this is an updated set on running.\n')
 cat('Currently hardcoded in trio_define.R\n')
 #Info from https://cnfl.extge.co.uk/display/BTS/Uniparental+disomy+cases+detected 
-updfile <- file.path(dirname(famout), 'UPD_cases_14012020.csv')
 upd <- fread(updfile, header = F) %>% as_tibble()
 present %<>% filter(!V1 %in% upd$V1)
 
