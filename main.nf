@@ -219,12 +219,12 @@ log.info "-\033[2m--------------------------------------------------\033[0m-"
 // CONDITION: if triodata_fam or triodata_keep_pheno files are not provided -
 // run triodata_define process to generate them.
 
-if (params.triodata_keep_pheno == 's3://lifebit-featured-datasets/projects/gel/siteqc/nodata' || params.triodata_fam == 's3://lifebit-featured-datasets/projects/gel/siteqc/nodata') {
+if (params.triodata_keep_pheno == params.empty_file || params.triodata_fam == params.empty_file) {
 
-  if (params.triodata_keep_pheno == 's3://lifebit-featured-datasets/projects/gel/siteqc/nodata') {
+  if (params.triodata_keep_pheno == params.empty_file) {
     log.warn "Trio file of families to keep was not provided. (You can specify it with --triodata_keep_pheno argument)"
   }
-  if (params.triodata_fam == 's3://lifebit-featured-datasets/projects/gel/siteqc/nodata') {
+  if (params.triodata_fam == params.empty_file) {
     log.warn "Trio .fam file of families was not provided. (You can specify it with --triodata_fam argument)"
   }
   log.warn "Triodata_define process will be run because either of triodata_keep_pheno or triodata_fam files was not provided."
@@ -263,7 +263,7 @@ if (params.triodata_keep_pheno == 's3://lifebit-featured-datasets/projects/gel/s
 
 }
 
-if (params.triodata_keep_pheno != 's3://lifebit-featured-datasets/projects/gel/siteqc/nodata' && params.triodata_fam != 's3://lifebit-featured-datasets/projects/gel/siteqc/nodata') {
+if (params.triodata_keep_pheno != params.empty_file && params.triodata_fam != params.empty_file) {
 
   Channel
     .fromPath(params.triodata_keep_pheno)
@@ -601,7 +601,7 @@ process pull_1kg_p3_sites {
  }
 
 // CONDITION: if file for mend_err_p3_keep_fam is not provided, run these two processes:
-if (params.mend_err_p3_keep_fam == 's3://lifebit-featured-datasets/projects/gel/siteqc/nodata') {
+if (params.mend_err_p3_keep_fam == params.empty_file) {
 
   log.warn "File specifying families to keep with mend_err_p3 process was not provided. Processes mend_err_p2 and mend_dist will be run for each input bcf/vcf file to determine families to keep that fulfill the 4SD criteria. If you wish to manually specify which families to keep, provide a .fam file with argument --mend_err_p3_keep_fam ."
 
@@ -661,7 +661,7 @@ process mend_dist {
  */
 
 // Based on if keep-pheno file was provided by user, select appropriate channel
-ch_mend_err_p3_keep_fam = params.mend_err_p3_keep_fam != 's3://lifebit-featured-datasets/projects/gel/siteqc/nodata' ? Channel.fromPath("$params.mend_err_p3_keep_fam") : ch_mend_dist_keep_families
+ch_mend_err_p3_keep_fam = params.mend_err_p3_keep_fam != params.empty_file ? Channel.fromPath("$params.mend_err_p3_keep_fam") : ch_mend_dist_keep_families
 
 process mend_err_p3 {
     publishDir "${params.outdir}/MendelErrSites", mode: params.publish_dir_mode
