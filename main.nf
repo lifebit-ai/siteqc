@@ -719,7 +719,7 @@ ch_joined_outputs_to_aggregate =
 
 
 process aggregate_annotation {
-    publishDir "${params.outdir}/Annotation_newtest/", mode: params.publish_dir_mode
+    publishDir "${params.outdir}/Annotation/", mode: params.publish_dir_mode
 
     input:
     tuple val(region),
@@ -737,10 +737,11 @@ process aggregate_annotation {
           file(AC_counts) from ch_joined_outputs_to_aggregate
 
     output:
-    file "BCFtools_site_metrics_*.txt" into ch_files_txt
-
+    file "BCFtools_site_metrics_*.txt" into ch_aggr_annotation_1
+    file "Summary_stats/*_all_flags.txt" into ch_summary_stats
     script:
     """
+    mkdir -p "Summary_stats"
     annotatePerChunk.R \
     ${region} \
     ${startfile} \
