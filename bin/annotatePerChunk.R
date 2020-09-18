@@ -1,9 +1,12 @@
 #!/usr/bin/env Rscript
 
-
-# Setup -------------------------------------------------------------------
-# all files will be explicilty passed to this script. 
-source("../src_actual/project_setup.R")
+library(data.table)
+library(magrittr)
+library(ggplot2)
+library(dplyr)
+library(reshape2)
+library(tidyr)
+library(stringr)
 
 args <- commandArgs(trailingOnly = T)
 
@@ -21,7 +24,8 @@ argList <- c('pos',
              'outdir',
              'nsamp',
              'acCount',
-             'kgp3txt')
+             'kgp3txt',
+             'king')
 
 
 allArgs <- list()
@@ -39,7 +43,7 @@ if(any(grepl('^king$', names(env), ignore.case = F))){
 } else {
   king <- F
 }
-
+king = allArgs$king
 #If final is included, then pull hwe data too
 if(any(grepl('^final$', names(env), ignore.case = F))){
   final <- env[grep('final', names(env))][[1]]
@@ -47,8 +51,9 @@ if(any(grepl('^final$', names(env), ignore.case = F))){
   final <- F
 }
 
-cat(king)
-cat(final)
+# I've kept these two separate to just make it more explicit for the user
+cat(paste0('KING: ', king,'\n'))
+cat(paste0('FINAL: ', final,'\n'))
 ### 
 
 
@@ -63,15 +68,7 @@ startProc <- function(x){
     select(-OC_OM)
   return(dat)
 }
-# Start file --------------------------------------------------------------
-# dat <- fread(argList$start) %>% 
-#   as_tibble() %>% 
-#   mutate(ID = paste0(V1, ":", V2, "-", V3, "/", V4, "-", V5)) %>%
-#   select(ID, everything()) %>%
-#   setNames(c("ID","#CHROM","POS","REF","ALT", "OC_OM")) %>%
-#   select(-OC_OM)
 
-#cat('Start file done...\n')
 
 # Missingness -------------------------------------------------------------
 missProc <- function(dat, x){
@@ -92,24 +89,7 @@ missProc <- function(dat, x){
   #be set to fully missing
 }
 
-# miss1 <- fread(missing1) %>% 
-#   as_tibble() %>%
-#   setNames(c("ID", "miss1")) 
-# 
-# miss2 <- fread(missing2) %>% as_tibble() %>% setNames(c("ID", "miss2"))
-# 
-# miss <- full_join(miss1, miss2, by="ID") %>%
-#   mutate(miss1 = replace_na(miss1, 0),
-#          miss2 = replace_na(miss2, 0)) %>%
-#   mutate(missingness = miss1/(miss2 + miss1)) %>%
-#   select(-miss1)
-# 
-# dat %<>% left_join(miss, by="ID") %>%
-#   mutate(missingness = replace_na(missingness, 0)) #sites as NAs here should
-# #be set to fully missing
 
-#cat('Missingness done...\n')
-#rm(miss, miss1) #we want to keep miss2 for now
 
 # Coverage ----------------------------------------------------------------
 covProc <- function(dat, x){
@@ -127,21 +107,7 @@ covProc <- function(dat, x){
   #be set to 0 coverage
 }
 
-# covAll <- fread(coverageAll) %>% 
-#   as_tibble() %>%
-#   setNames(c("ID", "medianCovAll"))
-# covNonMiss <- fread(coverageNonMiss) %>%
-#   as_tibble() %>%
-#   setNames(c("ID", "medianCovNonMiss"))
-# 
-# dat %<>% 
-#   left_join(covAll, by = "ID") %>%
-#   left_join(covNonMiss, by = "ID") %>%
-#   mutate(medianCovNonMiss = replace_na(medianCovNonMiss, 0))#sites as NAs here should
-# #be set to 0 coverage
 
-#cat('Coverage done...\n')
-#rm(covAll, covNonMiss)
 
 # GQ ----------------------------------------------------------------------
 gqProc <- function(dat, x){
@@ -154,14 +120,6 @@ gqProc <- function(dat, x){
   #be set to 0 coverage
 }
 
-# GQ <- fread(quality) %>% as_tibble() %>% setNames(c("ID", "medianGQ"))
-# 
-# dat %<>% left_join(GQ, by="ID") %>%
-#   mutate(medianGQ = replace_na(medianGQ, 0))#sites as NAs here should
-# #be set to 0 coverage
-
-#cat('GQ done...\n')
-#rm(GQ)
 
 # Allelic imbalance -------------------------------------------------------
 
@@ -189,31 +147,6 @@ abProc <- function(dat, x){
     mutate(AB_Ratio = replace_na(AB_Ratio, 99)) #scores of 99 will be changed downstream
 }
 
-
-# hetAll <- fread(allHets) %>%
-#   as_tibble() %>%
-#   rename('ID'='V1', 'AB_hetAll'='V2')
-# 
-# hetPass <- fread(passHets) %>% 
-#   as_tibble() %>%
-#   as_tibble() %>%
-#   rename('ID'='V1', 'AB_hetPass'='V2')
-# 
-# #We expect fewer passes than all hets, so NAs will be introduced,
-# #set these to 0
-# ab <- hetAll %>%
-#   left_join(hetPass, by='ID') %>%
-#   mutate(AB_hetPass = replace_na(AB_hetPass, 0)) %>%
-#   mutate(AB_Ratio = AB_hetPass/AB_hetAll) %>%
-#   select(ID, AB_Ratio)
-# 
-# dat %<>% 
-#   left_join(ab, by = "ID") %>%
-#   mutate(AB_Ratio = replace_na(AB_Ratio, 99))
-#cat('AB done...\n')
-#rm(hetAll, hetPass, ab)
-
-
 # Complete sites ----------------------------------------------------------
 completeProc <- function(dat, x){
   nsamples <- fread(x$nsamp) %>%     
@@ -221,16 +154,6 @@ completeProc <- function(dat, x){
   dat %<>% mutate( miss2 = replace_na(miss2, 0),
                    completeSites = 1-((nsamples$V1-miss2)/nsamples$V1))
 }
-
-# #Here we use the number of samples and the second missingness file to produce
-# #a percentage of sites that are complete for a row
-# 
-# 
-# nsamples <- fread(nsamp) %>% as_tibble()
-# dat %<>%
-#   mutate( miss2 = replace_na(miss2, 0),
-#           completeSites = 1-((nsamples$V1-miss2)/nsamples$V1))
-
 
 # MendelErrors ------------------------------------------------------------
 #Mendel errors are being moved from this section, they are not important for 
@@ -288,9 +211,14 @@ pull_data <- function(){
 }
 
 king_parse <- function(dat){
-  #Now let's filter down to biallelic SNPs only
+  #Now let's filter down to biallelic SNPs onlym also remove all
+  #C<->G & A<->T vars
   dat %<>% 
-    filter(grepl('chr\\d+:\\d+-[[:alpha:]]/[[:alpha:]]-\\.-\\.',ID))
+    filter(grepl('chr\\d+:\\d+-[[:alpha:]]/[[:alpha:]]-\\.-\\.',ID)) %>%
+    filter(!(REF == 'G' & ALT == 'C') |
+           !(REF == 'C' & ALT == 'G') |
+           !(REF == 'A' & ALT == 'T') |
+           !(REF == 'T' & ALT == 'A'))
   
   #For the king run we want AC count and 1kgp3 sites included
   ## AC Count 
@@ -340,14 +268,14 @@ standard_filter <- function(dat){
                        medianGQ >= 15 &
                        completeSites >= 0.5 &
                        AB_Ratio >= 0.25 & 
-                       phwe_eur >= 10e-6), 
+                       phwe_eur >= 1e-5),
                     "PASS", 'NA'),
            FILTER = ifelse(missingness > 0.05, paste0(FILTER, ':missingness'), FILTER),
            FILTER = ifelse(medianCovAll < 10, paste0(FILTER, ':depth'), FILTER),
            FILTER = ifelse(AB_Ratio < 0.25, paste0(FILTER, ':ABratio'), FILTER),
            FILTER = ifelse(completeSites < 0.5, paste0(FILTER, ':completeGTRatio'), FILTER),
            FILTER = ifelse(medianGQ < 15, paste0(FILTER, ':GQ'), FILTER),
-           FILTER = ifelse(phwe_eur < 10e-6, paste0(FILTER, ':phwe_eur'), FILTER)) %>%
+           FILTER = ifelse(phwe_eur < 1e-5, paste0(FILTER, ':phwe_eur'), FILTER)) %>%
     mutate(FILTER =
              ifelse(grepl('^NA:', FILTER), str_sub(FILTER, 4), FILTER))
   return(dat)
@@ -369,8 +297,7 @@ data_clean <- function(dat){
     mutate_at(.vars = vars(),
               .funs = list(~ replace_na(., '.')))
   
-  dat %<>% select(-ID)
-  
+  dat %<>% select(-ID, everything())
   #Scrub the 99 AB_ratio scores, revert to '.'
   dat %<>% mutate(AB_Ratio = ifelse(AB_Ratio == 99, '.', AB_Ratio))
   dat %<>% select(-'miss2')
@@ -383,7 +310,7 @@ dat <- pull_data()
 
 #Add HWE data if necessary
 if(final){ dat %<>% hweProc }
-
+cat('Missing data:\n')
 dat[,5:ncol(dat)] %>% summarise_all(list( ~(sum(is.na(.))))) %>%
   as.data.frame()
 
@@ -403,18 +330,17 @@ cat('VCF filter field populated...\n')
 if(final){
   #Tidy up the data a bit - will require the right columns for final data output
   dat %<>% data_clean()
-  #Redefine some of the names to keep things uniform
-  dat %<>% rename('medianDepthAll'='medianCovAll',
-                  'medianDepthNonMiss'='medianCovNonMiss',
-                  'completeGTRatio'='completeSites')
 }
 
-
+#Redefine some of the names to keep things uniform
+dat %<>% rename('medianDepthAll'='medianCovAll',
+                'medianDepthNonMiss'='medianCovNonMiss',
+                'completeGTRatio'='completeSites')
 
 #Write data to file
 if(king){
   filename <- paste0(allArgs$outdir, '/BCFtools_site_metrics_SUBCOLS', allArgs$pos,'.txt')
-  dat %<>% select('#CHROM',
+  dat %>% select('#CHROM',
                   'POS',
                   'REF',
                   'ALT',
@@ -435,5 +361,60 @@ if(king){
                 row.names = F, 
                 quote = F)
 }
+
+# Produce summary statistics ----------------------------------------------
+#Counts of filter type per chunk
+filts <- dat %>% count(FILTER) %>% mutate(pc = n/sum(n)*100,
+                                          chunk = allArgs$pos)
+
+outpath <- file.path(allArgs$outdir, 'Summary_stats/')
+
+filts %>% fwrite(paste0(outpath,Sys.Date(),'_all_flags.txt'),
+                 sep = '\t', append = T)
+
+
+#Min, max, median, mean, lower hinge, upper hinge
+if(final){
+  queryVars <- c('missingness',
+                 'medianDepthAll',
+                 'medianDepthNonMiss',
+                 'medianGQ',
+                 'completeGTRatio',
+                 'AB_Ratio',
+                 'phwe_eur')
+} else{
+  queryVars <- c('missingness',
+                 'medianDepthNonMiss',
+                 'medianGQ',
+                 'completeGTRatio',
+                 'AB_Ratio')
+}
+dat %<>% mutate_at(queryVars, .fun = as.numeric)
+
+
+stats <- list()
+for(x in queryVars){
+  stats[[x]] <- dat %>%
+    summarise(boxplot= list(
+      setNames(boxplot.stats(get(x))$stats,
+               c('lower_whisker','lower_hinge','median','upper_hinge','upper_whisker') ) ) ) %>%
+    tidyr::unnest_wider(boxplot)
+}
+
+stats %<>% bind_rows(.id = "id")
+
+mmmSd <- dat  %>% select(queryVars) %>%
+  pivot_longer(everything()) %>%
+  group_by(name) %>%
+  summarise_at(vars(value),
+               list(Min = min, Mean = mean, Max = max, Sd = sd),
+               na.rm = T)
+stats %<>% left_join(mmmSd, by = c('id'='name')) %>%
+  mutate(chunk = allArgs$pos)
+
+outfile <- file.path(outpath, paste0(Sys.Date(),
+                                     '_Summary_stats_for_plotting.txt'))
+stats %>% fwrite(outfile, append = T, sep = '\t')
+
 cat('END')
 ### END ###

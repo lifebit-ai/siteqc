@@ -16,11 +16,18 @@
 args <- commandArgs(trailingOnly = T)
 input <- as.character(args[1])
 inaggregate <- as.character(args[2])
-famout <- as.character(args[3])
-keepout <- as.character(args[4])
+updfile <- as.character(args[3])
+famout <- as.character(args[4])
+keepout <- as.character(args[5])
 #Or locally
 #setwd('Documents/AggregateVCF/variant_QC/GEL/Data/')
-source("../src/project_setup.R")
+library(data.table)
+library(magrittr)
+library(ggplot2)
+library(dplyr)
+library(reshape2)
+library(tidyr)
+library(stringr)
 ### 
 
 
@@ -44,8 +51,8 @@ prep_fam <- function(dat, extendedTrio = F){
                  #From here pad the PAT_p and MAT_p so proband info is filled,
                  #and then revert the data to 0 in mother and father
                  group_by(family_id) %>% 
-                 tidyr::fill(PAT_p, .direction = 'up') %>%
-                 tidyr::fill(MAT_p, .direction = 'up') %>%
+                 tidyr::fill(PAT_p, .direction = 'updown') %>%
+                 tidyr::fill(MAT_p, .direction = 'updown') %>%
                  mutate(PAT_p = 
                           ifelse(trio %in% c('Father', 'Mother'),
                                  as.character(0), PAT_p),
@@ -64,7 +71,7 @@ prep_fam <- function(dat, extendedTrio = F){
     )
   tmp <- tmp[[1]] %>% 
     group_by(family_id) %>% 
-    filter(n() > 2) %>%
+    dplyr::filter(n() > 2) %>%
     ungroup()#we don't want duos, but we want to be more specific in 
   #filtering trios
   if(!extendedTrio){
@@ -77,7 +84,7 @@ prep_fam <- function(dat, extendedTrio = F){
       arrange(family_id, offspring, isProband) %>% 
       distinct(family_id, offspring, .keep_all = T ) %>%
       group_by(family_id) %>%
-      filter(n() > 2) %>% #we have to do this again because we may have trios that 
+      dplyr::filter(n() > 2) %>% #we have to do this again because we may have trios that 
     #were composed of parent offspring offpspring, so will now be duo
       select(-offspring, -isProband) %>%
       ungroup()
@@ -105,7 +112,6 @@ cat('Assumes stable file naming convention to pull platekey\n')
 cat('Filtering out UPD cases. Check that this is an updated set on running.\n')
 cat('Currently hardcoded in trio_define.R\n')
 #Info from https://cnfl.extge.co.uk/display/BTS/Uniparental+disomy+cases+detected 
-updfile <- file.path(dirname(famout), 'UPD_cases_14012020.csv')
 upd <- fread(updfile, header = F) %>% as_tibble()
 present %<>% filter(!V1 %in% upd$V1)
 
@@ -116,7 +122,7 @@ cat('Dimensions post filtering based on aggregate membership: ', dim(dat), '\n')
 #Only keep whole trios
 dat %<>% 
   group_by(family_id) %>%
-  filter(n() > 2) %>%
+  dplyr::filter(n() > 2) %>%
   ungroup()
 cat('Dimensions post filtering to complete trios: ', dim(dat), '\n')
 
