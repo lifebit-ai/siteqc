@@ -34,7 +34,7 @@ The lifebit-ai/siteqc pipeline comes with documentation about the pipeline which
 
 The `siteqc` was originally written by Daniel Rhodes and the Genomics England Bioinformatics team.
 
-The Nextflow implementation of the pipeline was developed by Christina Chatzipantsiou for use by Genomics England and collaborators.
+The Nextflow implementation of the pipeline was developed by Christina Chatzipantsiou, Vlad Dembrovskyi for use by Genomics England and collaborators.
 
 ## Contributions and Support
 
