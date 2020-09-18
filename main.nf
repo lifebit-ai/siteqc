@@ -186,17 +186,6 @@ ch_xx_sample_id_median_gq,
 ch_xx_sample_id_ab_ratio_p1,
 ch_xx_sample_id_ab_ratio_p2) = ch_xx_sample_id_files.into(8)
 
-// Plink files for mend_err_p* processes
-Channel
-  .fromPath(params.triodata_keep_pheno)
-  .set {ch_triodata_keep_pheno} 
-
-Channel
-  .fromPath(params.triodata_fam)
-  .set {ch_triodata_fam}
-
-(ch_mend_err_p2_fam,
- ch_mend_err_p3_fam) = ch_triodata_fam.into(2)
 
 // Header log info
 log.info nfcoreHeader()
@@ -247,6 +236,71 @@ log.info "-\033[2m--------------------------------------------------\033[0m-"
 //     scrape_software_versions.py &> software_versions_mqc.yaml
 //     """
 // }
+
+
+// CONDITION: if triodata_fam or triodata_keep_pheno files are not provided -
+// run triodata_define process to generate them.
+
+if (params.triodata_keep_pheno == params.empty_file || params.triodata_fam == params.empty_file) {
+
+  if (params.triodata_keep_pheno == params.empty_file) {
+    log.warn "Trio file of families to keep was not provided. (You can specify it with --triodata_keep_pheno argument)"
+  }
+  if (params.triodata_fam == params.empty_file) {
+    log.warn "Trio .fam file of families was not provided. (You can specify it with --triodata_fam argument)"
+  }
+  log.warn "Triodata_define process will be run because either of triodata_keep_pheno or triodata_fam files was not provided."
+
+  Channel
+      .fromPath(params.triofile)
+      .set {ch_triofile}
+
+  Channel
+      .fromPath(params.included_samples)
+      .set {ch_included_samples}
+
+  Channel
+      .fromPath(params.updfile)
+      .set {ch_updfile}
+
+  /*
+   * STEP - triodata_define:  Create triodata files if not provided by user
+   */
+  process triodata_define {
+      publishDir "${params.outdir}/triodata/", mode: params.publish_dir_mode
+
+      input:
+      file(triofile) from ch_triofile
+      file(included_samples) from ch_included_samples
+      file(updfile) from ch_updfile
+
+      output:
+      file("triodata.fam") into ch_triodata_fam
+      file("keep.txt") into ch_triodata_keep_pheno
+      script:
+      """
+      trio_define.R ${triofile} ${included_samples} ${updfile} "triodata.fam" "keep.txt"
+      """
+  }
+
+}
+
+if (params.triodata_keep_pheno != params.empty_file && params.triodata_fam != params.empty_file) {
+
+  Channel
+    .fromPath(params.triodata_keep_pheno)
+    .set {ch_triodata_keep_pheno}
+
+  Channel
+    .fromPath(params.triodata_fam)
+    .set {ch_triodata_fam}
+
+}
+//END OF CONDIION
+
+(ch_mend_err_p2_fam,
+ ch_mend_err_p3_fam) = ch_triodata_fam.into(2)
+
 
 /*
  * STEP - start_file:  Create a backbone of IDs for other data to be joined to
@@ -554,7 +608,6 @@ process pull_1kg_p3_sites {
 
 
      script:
-     optional_keep_argument = params.triodata_keep_pheno != "s3://lifebit-featured-datasets/projects/gel/siteqc/nodata" ? "--keep ${triodata_keep_file}" : ""
      """
      plink2 --bcf ${bcf} \
      --make-bed \
@@ -565,9 +618,14 @@ process pull_1kg_p3_sites {
      --real-ref-alleles \
      --allow-extra-chr \
      --out BED_trio_${region} \
-     ${optional_keep_argument}
+     --keep ${triodata_keep_file}
      """
  }
+
+// CONDITION: if file for mend_err_p3_keep_fam is not provided, run these two processes:
+if (params.mend_err_p3_keep_fam == params.empty_file) {
+
+  log.warn "File specifying families to keep with mend_err_p3 process was not provided. Processes mend_err_p2 and mend_dist will be run for each input bcf/vcf file to determine families to keep that fulfill the 4SD criteria. If you wish to manually specify which families to keep, provide a .fam file with argument --mend_err_p3_keep_fam ."
 
 /*
  * STEP - mend_err_p2: Calculate mendelian errors
@@ -617,16 +675,23 @@ process mend_dist {
     """
 }
 
+}
+
+
 /*
  * STEP - mend_err_p3: Calculate mendel errors on just good families
  */
+
+// Based on if keep-pheno file was provided by user, select appropriate channel
+ch_mend_err_p3_keep_fam = params.mend_err_p3_keep_fam != params.empty_file ? Channel.fromPath("$params.mend_err_p3_keep_fam") : ch_mend_dist_keep_families
+
 process mend_err_p3 {
     publishDir "${params.outdir}/MendelErrSites", mode: params.publish_dir_mode
 
     input:
     each file(predefined_fam) from ch_mend_err_p3_fam
     tuple val(region), file(bed), file(bim), file(fam), file(log) from ch_mend_err_p1_plink_files_p3
-    each file(mend_dist_keep_fam) from ch_mend_dist_keep_families
+    each file(keep_fam) from ch_mend_err_p3_keep_fam
 
     output:
     tuple val(region), file("MendErr*.lmendel") into ch_mend_err_p3_out
@@ -639,7 +704,7 @@ process mend_err_p3 {
     --fam ${predefined_fam} \
     --allow-extra-chr \
     --allow-no-sex \
-    --keep-fam ${mend_dist_keep_fam} \
+    --keep-fam ${keep_fam} \
     --mendel summaries-only \
     --out MendErr_${region}
     """
@@ -676,7 +741,7 @@ ch_joined_outputs_to_aggregate =
 
 
 process aggregate_annotation {
-    publishDir "${params.outdir}/Annotation_newtest/", mode: params.publish_dir_mode
+    publishDir "${params.outdir}/Annotation/", mode: params.publish_dir_mode
 
     input:
     tuple val(region),
@@ -694,10 +759,11 @@ process aggregate_annotation {
           file(AC_counts) from ch_joined_outputs_to_aggregate
 
     output:
-    file "BCFtools_site_metrics_*.txt" into ch_files_txt
-
+    file "BCFtools_site_metrics_*.txt" into ch_aggr_annotation_1
+    file "Summary_stats/*_all_flags.txt" into ch_summary_stats
     script:
     """
+    mkdir -p "Summary_stats"
     annotatePerChunk.R \
     ${region} \
     ${startfile} \
