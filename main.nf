@@ -92,7 +92,8 @@ query_format_miss1 = params.query_format_miss1
 // Define channels based on params
   Channel.fromPath(params.inputDir+'/*.txt')
                         .ifEmpty { exit 1, "Input dir for annotation txt files not found at ${params.inputDir}. Is the dir path correct?" }
-                        .map { txt -> ['chr'+ txt.simpleName.split('_chr').last() , txt] }
+                        .filter{txt -> txt =~/chr\d+/}
+                        .map { txt -> ['chr'+ txt.simpleName.split('_chr').last() , txt] }.view()
                         .set { ch_bcftools_site_metrics_subcols }
 
   Channel.fromPath(params.inputFinalPlatekeys)
@@ -110,7 +111,10 @@ query_format_miss1 = params.query_format_miss1
                         .ifEmpty { exit 1, "Input file with Michigan LD data not found at ${params.inputAncestryAssignmentProbs}. Is the file path correct?" }
                         .set { ch_inputAncestryAssignmentProbs }
                         
-                        
+   Channel.fromPath(params.inputProbs200K)
+                        .ifEmpty { exit 1, "Input file with Ancestry assignments of 200K data not found at ${params.inputinputProbs200K}. Is the file path correct?" }
+                        .set { ch_inputinputProbs200K }
+                                               
   Channel.fromPath(params.inputMichiganLDfileExclude)
                         .ifEmpty { exit 1, "Input file with Michigan LD for excluding regions  not found at ${params.inputMichiganLDfile}. Is the file path correct?" }
                         .set { ch_inputMichiganLDfileExclude }
@@ -120,6 +124,7 @@ if (params.input.endsWith(".csv")) {
                         .ifEmpty { exit 1, "Input .csv list of input tissues not found at ${params.input}. Is the file path correct?" }
                         .splitCsv(sep: ',',  skip: 1)
                         .map { bcf, index -> ['chr'+file(bcf).simpleName.split('_chr').last() , file(bcf), file(index)] }
+                        .filter{bcf -> bcf =~/chr\d+/}.view()
                         .set { ch_bcfs }
 
 }
@@ -225,7 +230,7 @@ process further_filtering {
     #Produce filtered txt file
     bcftools query MichiganLD_regionsFiltered_${region}.bcf \
     -i 'MAF[0]>0.01' -f '%CHROM\t%POS\t%REF\t%ALT\t%MAF\n' | \
-    awk -F "\t" '{ if((\$3 == "G" && \$4 == "C") || (\$3 == "A" && \$4 == "T")) {next} { print \$0} }' \
+    awk -F "\t" '{ if((\$5 == "G" && \$6 == "C") || (\$6 == "G" && \$5 == "C") || (\$5 == "A" && \$6 == "T") || (\$6 == "A" && \$5 == "T")) {next} { print \$0} }' \
     > MAF_filtered_1kp3intersect_${region}.txt
     """
 }
@@ -270,7 +275,7 @@ process create_final_king_vcf {
  * STEP - concat_king_vcf: Concatenate compressed vcfs to per chromosome files
  */
 chrs = [10]
-//chrs = [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,10,21,22]
+//chrs = [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22]
 process concat_king_vcf {
     publishDir "${params.outdir}/concat_king_vcf/", mode: params.publish_dir_mode
 
@@ -300,25 +305,28 @@ process concat_king_vcf {
 
 process make_bed_all {
     publishDir "${params.outdir}/make_bed_all/", mode: params.publish_dir_mode
-
+    container = "lifebitai/plink2"
     input:
     set val(chr),file("chrom${chr}_merged_filtered.vcf.gz"),file("chrom${chr}_merged_filtered.vcf.gz.tbi") from ch_vcfs_per_chromosome
-    
+    file(michiganld_exclude_regions_file) from ch_inputMichiganLDfileExclude
     output:
     set val(chr),file("BED_${chr}.bed"),file("BED_${chr}.bim"),file("BED_${chr}.fam") into ch_make_bed_all
 
     script:
 
     """
-    bcftools view chrom${chr}_merged_filtered.vcf.gz \
-    -Ov |\
-    plink --vcf /dev/stdin \
-    --vcf-half-call m \
-    --double-id \
+    stringQuery='#-\$r/\$a-.-.'
+    plink2 --vcf chrom${chr}_merged_filtered.vcf.gz \
     --make-bed \
+    --vcf-half-call m \
+    --set-missing-var-ids chr@:\$stringQuery \
+    --new-id-max-allele-len 60 missing \
+    --exclude range ${michiganld_exclude_regions_file} \
+    --double-id \
     --real-ref-alleles \
     --allow-extra-chr \
-    --out BED_${chr}
+    --threads 30 \
+    --out BED_${chr}   
     """
 }
 /* STEP_23
@@ -330,7 +338,7 @@ process make_bed_all {
 
     input:
     set val(chr),file("BED_${chr}.bed"),file("BED_${chr}.bim"),file("BED_${chr}.fam") from ch_make_bed_all
-    file(michiganld_exclude_regions_file) from ch_inputMichiganLDfileExclude
+    
     output:
     file "BED_LDpruned_${chr}*" into ch_ld_bed
 
@@ -338,10 +346,10 @@ process make_bed_all {
     """
     #Not considering founders in this as all of our SNPs are common
     plink  \
-    --exclude range ${michiganld_exclude_regions_file} \
     --keep-allele-order \
     --bfile BED_${chr} \
     --indep-pairwise 500kb 1 0.1 \
+    --threads 30 \
     --out BED_LD_${chr}
     
     #Now that we have our correct list of SNPs (prune.in), filter the original
@@ -353,6 +361,7 @@ process make_bed_all {
     --extract BED_LD_${chr}.prune.in \
     --double-id \
     --allow-extra-chr \
+    --threads 30 \
     --out BED_LDpruned_${chr}
     """
 }
@@ -379,208 +388,92 @@ process merge_autosomes {
     rm mergelist.txt
     """
 }
-
-/* STEP_25
- * STEP - hwe_pruning_30k_data: Produce a first pass HWE filter
- * We use:
- * The 195k SNPs from above
- * The intersection bfiles (on all 80k)
- * Then we make BED files of unrelated individuals for each superpop (using only unrelated samples from 30k)
- * We do this using the inferred ancestries from the 30k
- */
-
-// TODO: consider decoupling R scripts from plink scripts
-process hwe_pruning_30k_data {
-    publishDir "${params.outdir}/hwe_pruning_30k_data/", mode: params.publish_dir_mode
-
+process hwe_pruning_30k_snps {
+    publishDir "${params.outdir}/hwe_pruning_30k_snps/", mode: params.publish_dir_mode
     input:
     set file("autosomes_LD_pruned_1kgp3Intersect.bed"), file("autosomes_LD_pruned_1kgp3Intersect.bim"), file("autosomes_LD_pruned_1kgp3Intersect.fam"),file("autosomes_LD_pruned_1kgp3Intersect.nosex") from ch_merge_autosomes
     file (ancestry_assignment_probs) from ch_inputAncestryAssignmentProbs
     file (pc_sancestry_related) from ch_inputPCsancestryrelated
+
     output:
-    
-    set file("hwe10e-2_superpops_195ksnps"), file("hwe10e-6_superpops_195ksnps") into ch_hwe_pruning_30k_data
-    
+    file "hwe1e-5_superpops_195ksnps" into hwe_pruning_30k_snps
+
     script:
     """
     R -e 'library(data.table); 
-    print("Hola0");
     library(dplyr);
-    print("Hola1"); 
     dat <- fread("${ancestry_assignment_probs}") %>% as_tibble();
-    print("Hola2");
     unrels <- fread("${pc_sancestry_related}") %>% as_tibble() %>% filter(unrelated_set == 1);
     dat <- dat %>% filter(plate_key %in% unrels\$plate_key);
     for(col in c("AFR","EUR","SAS","EAS")){dat[dat[col]>0.8,c("plate_key",col)] %>% write.table(paste0(col,"pop.txt"), quote = F, row.names=F)}
     '
-    
+
     bedmain="autosomes_LD_pruned_1kgp3Intersect"
     for pop in AFR EUR SAS EAS; do
         echo \${pop}
         awk '{print \$1"\t"\$1}' \${pop}pop.txt > \${pop}keep
         plink \
+        --keep-allele-order \
         --make-bed \
         --bfile \${bedmain} \
         --out \${pop} 
         
-        plink --bfile \${pop} --hardy --out \${pop} --nonfounders
+        plink --bfile \${pop} --hardy midp --out \${pop} --nonfounders
     done
 
+    #Combine the HWE and produce a list of pass 
     R -e 'library(data.table);
     library(dplyr);
     dat <- lapply(c("EUR.hwe","AFR.hwe", "SAS.hwe", "EAS.hwe"),fread);
     names(dat) <- c("EUR.hwe","AFR.hwe", "SAS.hwe", "EAS.hwe");
     dat <- dat %>% bind_rows(.id="id");
     write.table(dat, "combinedHWE.txt", row.names = F, quote = F)
-    '
-    R -e 'library(dplyr); library(data.table);
-        dat <- fread("combinedHWE.txt") %>% as_tibble();
-        #Create set that is just SNPS that are >10e-6 in all pops
-        dat %>% filter(P >10e-6) %>% group_by(SNP) %>% count() %>% filter(n==4) %>% select(SNP) %>% distinct() %>%
-        write.table("hwe10e-6_superpops_195ksnps", row.names = F, quote = F)
-        '
-    R -e 'library(dplyr); library(data.table);
-        dat <- fread("combinedHWE.txt") %>% as_tibble();
-        #Create set that is just SNPS that are >10e-2 in all pops
-        dat %>% filter(P >10e-2) %>% group_by(SNP) %>% count() %>% filter(n==4) %>% select(SNP) %>% distinct() %>%
-        write.table("hwe10e-2_superpops_195ksnps", row.names = F, quote = F)
-        '
-
+    #Create set that is just SNPS that are >1e-5 in all pops
+    dat %>% filter(P >1e-5) %>% group_by(SNP) %>% count() %>% filter(n==4) %>% select(SNP) %>% distinct() %>%
+    write.table("hwe1e-5_superpops_195ksnps", row.names = F, quote = F)
+    ' 
     """
 }
+process king_coefficients{
+       publishDir "${params.outdir}/king_coefficients/", mode: params.publish_dir_mode 
+       container = "lifebitai/plink2"
+       
 
-process get_king_coeffs {
-    publishDir "${params.outdir}/get_king_coeffs/", mode: params.publish_dir_mode
-    container = "lifebitai/plink2"
-    input:
-    set file("autosomes_LD_pruned_1kgp3Intersect.bed"), file("autosomes_LD_pruned_1kgp3Intersect.bim"), file("autosomes_LD_pruned_1kgp3Intersect.fam"),file("autosomes_LD_pruned_1kgp3Intersect.nosex") from ch_merge_autosomes2
+       input:
+       set file("autosomes_LD_pruned_1kgp3Intersect.bed"), file("autosomes_LD_pruned_1kgp3Intersect.bim"), file("autosomes_LD_pruned_1kgp3Intersect.fam"),file("autosomes_LD_pruned_1kgp3Intersect.nosex") from ch_merge_autosomes2
+       file "hwe1e-5_superpops_195ksnps" from hwe_pruning_30k_snps
 
-    output:
-    file "matrix-autosomes_LD_pruned_1kgp3Intersect*" into ch_get_king_coeffs
-
-    script:
-
-    """
-    plink2 --bfile \
-    autosomes_LD_pruned_1kgp3Intersect \
-    --make-king square \
-    --out \
-    matrix-autosomes_LD_pruned_1kgp3Intersect \
-    --thread-num 30
-    """
-}
-
-/* STEP_27
- * STEP - get_king_coeffs_alt
- * Daniel's notes:
- * The main difference for this is that we are aiming to do all the pcAIR
- * using other tools. Therefore the output needs to be different
- */
-
-process get_king_coeffs_alt {
-    publishDir "${params.outdir}/get_king_coeffs_alt/", mode: params.publish_dir_mode
-    container = "lifebitai/plink2"
-    input:
-    set file("autosomes_LD_pruned_1kgp3Intersect.bed"), file("autosomes_LD_pruned_1kgp3Intersect.bim"), file("autosomes_LD_pruned_1kgp3Intersect.fam"),file("autosomes_LD_pruned_1kgp3Intersect.nosex") from ch_merge_autosomes3
-    set file("hwe10e-2_superpops_195ksnps"), file("hwe10e-6_superpops_195ksnps") from ch_hwe_pruning_30k_data
-
-    output:
-    set file("autosomes_LD_pruned_1kgp3Intersect_triangle.king.bin"),file("autosomes_LD_pruned_1kgp3Intersect_triangle.king.id"), file("autosomes_LD_pruned_1kgp3Intersect_triangle_HWE10_2.king.bin"),file("autosomes_LD_pruned_1kgp3Intersect_triangle_HWE10_2.king.id"),file("autosomes_LD_pruned_1kgp3Intersect_triangle_HWE10_6.king.bin"), file("autosomes_LD_pruned_1kgp3Intersect_triangle_HWE10_6.king.id") into ch_get_king_coeffs_alt
-
-    script:
-
-    """
-    plink2 --bfile \
-    autosomes_LD_pruned_1kgp3Intersect \
-    --make-king triangle bin \
-    --out \
-    autosomes_LD_pruned_1kgp3Intersect_triangle \
-    --thread-num 30
-    plink2 --bfile autosomes_LD_pruned_1kgp3Intersect --extract hwe10e-2_superpops_195ksnps --make-king triangle bin --out autosomes_LD_pruned_1kgp3Intersect_triangle_HWE10_2
-    plink2 --bfile autosomes_LD_pruned_1kgp3Intersect --extract hwe10e-6_superpops_195ksnps --make-king triangle bin --out autosomes_LD_pruned_1kgp3Intersect_triangle_HWE10_6
-    """
-}
-
-/* STEP_28
- * STEP - pcair_alternate: 
- * Daniel's notes:
- * This isn't actually intended to run as a function, it is just to stop stuff running
- * when sourcing this file that we wrap it in a function
- * Alternate approach to producing the PC-relate info
- */
-
-process pcair_alternate {
-    publishDir "${params.outdir}/pcair_alternate/", mode: params.publish_dir_mode
-    container = "lifebitai/plink2"
-    input:
-    set file("autosomes_LD_pruned_1kgp3Intersect.bed"), file("autosomes_LD_pruned_1kgp3Intersect.bim"), file("autosomes_LD_pruned_1kgp3Intersect.fam"),file("autosomes_LD_pruned_1kgp3Intersect.nosex") from ch_merge_autosomes4
-    set file("autosomes_LD_pruned_1kgp3Intersect_triangle.king.bin"),file("autosomes_LD_pruned_1kgp3Intersect_triangle.king.id"), file("autosomes_LD_pruned_1kgp3Intersect_triangle_HWE10_2.king.bin"),file("autosomes_LD_pruned_1kgp3Intersect_triangle_HWE10_2.king.id"),file("autosomes_LD_pruned_1kgp3Intersect_triangle_HWE10_6.king.bin"), file("autosomes_LD_pruned_1kgp3Intersect_triangle_HWE10_6.king.id") from ch_get_king_coeffs_alt
-
-    output:
-    set file("autosomes_LD_pruned_1kgp3Intersect_unrelated*"), file("autosomes_LD_pruned_1kgp3Intersect_related*") into ch_pcair_alternate
-    set file("autosomes_LD_pruned_1kgp3Intersect_triangle_HWE10_2.king.cutoff.in.id"), file("autosomes_LD_pruned_1kgp3Intersect_triangle_HWE10_6.king.cutoff.in.id"),file("autosomes_LD_pruned_1kgp3Intersect.king.cutoff.in.id") into ch_pcair_alternate_cutoffs
-    script:
-
-    """
-    plink2 --bfile autosomes_LD_pruned_1kgp3Intersect \
-    --king-cutoff autosomes_LD_pruned_1kgp3Intersect_triangle 0.0442 && \
-    mv plink2.king.cutoff.in.id autosomes_LD_pruned_1kgp3Intersect.king.cutoff.in.id && \
-    mv plink2.king.cutoff.out.id autosomes_LD_pruned_1kgp3Intersect.king.cutoff.out.id
-
-
-
-    plink2 --bfile autosomes_LD_pruned_1kgp3Intersect \
-    --king-cutoff autosomes_LD_pruned_1kgp3Intersect_triangle_HWE10_2 0.0442 && \
-    mv plink2.king.cutoff.in.id  autosomes_LD_pruned_1kgp3Intersect_triangle_HWE10_2.king.cutoff.in.id && \
-    mv plink2.king.cutoff.out.id  autosomes_LD_pruned_1kgp3Intersect_triangle_HWE10_2.king.cutoff.out.id
-    plink2 --bfile autosomes_LD_pruned_1kgp3Intersect \
-    --king-cutoff autosomes_LD_pruned_1kgp3Intersect_triangle_HWE10_6 0.0442 && \
-    cp plink2.king.cutoff.in.id  autosomes_LD_pruned_1kgp3Intersect_triangle_HWE10_6.king.cutoff.in.id && \
-    cp plink2.king.cutoff.out.id  autosomes_LD_pruned_1kgp3Intersect_triangle_HWE10_6.king.cutoff.out.id
-
-
-
-    plink2 --bfile autosomes_LD_pruned_1kgp3Intersect \
-    --make-bed \
-    --keep plink2.king.cutoff.in.id \
-    --out autosomes_LD_pruned_1kgp3Intersect_unrelated
-
-
-    plink2 --bfile autosomes_LD_pruned_1kgp3Intersect \
-    --make-bed \
-    --remove plink2.king.cutoff.in.id \
-    --out autosomes_LD_pruned_1kgp3Intersect_related
-    """
- }
-
-/* STEP_28-a
- * STEP - pcair_alternate-Rscript-complement: 
- */
-
- /* STEP_28-a
- * STEP - pcair_alternate-Rscript-complement: 
- */
-process pcair_alternate_Rscript {
-    publishDir "${params.outdir}/pcair_alternate_Rscript/", mode: params.publish_dir_mode
-    echo true
-    input:
-    set file("autosomes_LD_pruned_1kgp3Intersect_triangle_HWE10_2.king.cutoff.in.id"), file("autosomes_LD_pruned_1kgp3Intersect_triangle_HWE10_6.king.cutoff.in.id"),file("autosomes_LD_pruned_1kgp3Intersect.king.cutoff.in.id") from ch_pcair_alternate_cutoffs
+       output:
+       set file("autosomes_LD_pruned_1kgp3Intersect_unrelated*"), file("autosomes_LD_pruned_1kgp3Intersect_related*") into king_coefficients
     
-    output:
 
-    script:
+       script:
     """
-        R -e 'library(data.table); library(dplyr); 
-        dat <- fread("autosomes_LD_pruned_1kgp3Intersect.king.cutoff.in.id") %>% as_tibble();
-        hwe2 <- fread("autosomes_LD_pruned_1kgp3Intersect_triangle_HWE10_2.king.cutoff.in.id") %>% as_tibble();
-        hwe6 <- fread("autosomes_LD_pruned_1kgp3Intersect_triangle_HWE10_6.king.cutoff.in.id") %>% as_tibble();
-        dat <- bind_rows(dat, hwe2, hwe6, .id="id");
-        dat %>% group_by(id) %>% summarise(n()); 
-        dat %>% group_by(IID) %>% summarise(n=n()) %>% count(n)'
+    plink2 \
+    --bfile autosomes_LD_pruned_1kgp3Intersect \
+    --extract hwe1e-5_superpops_195ksnps \
+    --make-king triangle bin \
+    --out autosomes_LD_pruned_1kgp3Intersect_triangle_HWE1e_5 \
+    --thread-num 30
+    
 
+    plink2 --bfile autosomes_LD_pruned_1kgp3Intersect \
+       --king-cutoff autosomes_LD_pruned_1kgp3Intersect_triangle_HWE1e_5 0.0442 && \
+       mv plink2.king.cutoff.in.id  autosomes_LD_pruned_1kgp3Intersect_triangle_HWE1_5.king.cutoff.in.id && \
+       mv plink2.king.cutoff.out.id  autosomes_LD_pruned_1kgp3Intersect_triangle_HWE1_5.king.cutoff.out.id
+    
+    plink2 --bfile autosomes_LD_pruned_1kgp3Intersect \
+    --make-bed \
+    --keep autosomes_LD_pruned_1kgp3Intersect_triangle_HWE1_5.king.cutoff.in.id \
+    --out autosomes_LD_pruned_1kgp3Intersect_unrelated
+    
+    plink2 --bfile autosomes_LD_pruned_1kgp3Intersect \
+    --make-bed \
+    --remove autosomes_LD_pruned_1kgp3Intersect_triangle_HWE1_5.king.cutoff.in.id \
+    --out autosomes_LD_pruned_1kgp3Intersect_related
+    
     """
 }
- 
 
 
 def nfcoreHeader() {
