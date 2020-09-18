@@ -1,7 +1,7 @@
 FROM nfcore/base@sha256:2043dea2e3215a32576e2e9fa957d8d41f439d209abbf1f858fd02829d2b7d64
 #FROM nfcore/base:1.10.2
 
-LABEL authors="Christina Chatzipantsiou" \
+LABEL authors="Christina Chatzipantsiou, Vlad Dembrovskyi" \
       description="Docker image containing all software requirements for the siteqc pipeline"
 
 
