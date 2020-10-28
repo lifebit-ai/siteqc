@@ -4,6 +4,15 @@ FROM nfcore/base@sha256:2043dea2e3215a32576e2e9fa957d8d41f439d209abbf1f858fd0282
 LABEL authors="Christina Chatzipantsiou, Vlad Dembrovskyi" \
       description="Docker image containing all software requirements for the siteqc pipeline"
 
+# Install GAWK and other needed tools
+RUN apt-get update && \
+    apt-get install -y \
+                   gawk \
+                   wget \
+                   zip \
+                   procps && \
+    rm -rf /var/lib/apt/lists/*
+
 
 # Install the conda environment
 COPY environment.yml /
@@ -29,8 +38,10 @@ RUN conda env export --name nf-core-siteqc-1.0dev > nf-core-siteqc-1.0dev.yml
 RUN touch .Rprofile
 RUN touch .Renviron
 
+# Install plink2 Alpha 2.3 Developmental (20 Oct 2020)
+# Correct version of Plink2 is not available on Conda
+RUN wget http://s3.amazonaws.com/plink2-assets/plink2_linux_x86_64_20201020.zip && \
+    unzip plink2_linux_x86_64_20201020.zip -d plink2 && \
+    rm plink2_linux_x86_64_20201020.zip
 
-# Install GAWK
-RUN apt-get update && \
-    apt-get install -y \
-                   gawk \
+ENV PATH /plink2:$PATH

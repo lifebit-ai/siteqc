@@ -592,7 +592,6 @@ process pull_1kg_p3_sites {
   */
  process mend_err_p1 {
      publishDir "${params.outdir}/MendelErr/", mode: params.publish_dir_mode
-     container = "lifebitai/plink2@sha256:e0183ea08bf04e7ce36fa13e24daf3696232198c93a07c952cb0d0f3028966b9"
 
      input:
      set val(region), file(bcf), file(index) from ch_bcfs_mend_err_p1 
