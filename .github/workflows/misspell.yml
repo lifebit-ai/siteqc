@@ -12,6 +12,6 @@ jobs:
         uses: reviewdog/action-misspell@master
         with:
           github_token: ${{ secrets.github_token }}
-          locale: "UK"
+          locale: "US"
           reporter: github-pr-check # Available: github-pr-check shows a stop icon instead of checkmark
           level: info
