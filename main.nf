@@ -603,7 +603,7 @@ process mend_err_p2 {
 
     input:
     each file(predefined_fam) from ch_mend_err_p2_fam
-    tuple val(region), file(bed), file(bim), file(fam), file(log) from ch_mend_err_p1_plink_files_p2
+    tuple val(region), file(bed), file(bim), file(fam), file(log) from ch_mend_err_p1_plink_files_p2.filter { it[0] =~ /chr[^X]/ } //excluding chrX because it can't be used for mend_dist
 
     output:
     file "*.fmendel" into ch_mend_err_p2_plink_files
