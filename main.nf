@@ -45,9 +45,11 @@ def helpMessage() {
                                       both outputs of this process are provided by user with arguments --triodata_keep_pheno
                                       and --triodata_fam (see optional arguments).
 
-      -profile [str]                  Configuration profile to use. Can use multiple (comma separated)
-                                      Available: standard (default), test.
-
+      --xx_sample_ids [file]          Path to file that contains the XX sample ids. Must be single column, without a header.
+      --xy_sample_ids [file]          Path to file that contains the XY sample ids. Must be single column, without a header.
+                                      This is important and required information because X chromosomes from female and male 
+                                      participants are treated differently. X chromosome metrics will be calculaated only
+                                      using data from participants with a determined sex.
     Optional arguments:
       --updfile [file]                File with a list of participants' platekeys to be exluded from the analysis.
                                       Optional input to triodata_define process.
@@ -62,10 +64,10 @@ def helpMessage() {
                                       different file to be used instead. In this case mend_dist and mend_err_p2 processes
                                       will be skipped.
 
-      --xx_sample_ids [file]          Path to file that contains the XX sample ids. Must be single column, without a header.
-      --xy_sample_ids [file]          Path to file that contains the XY sample ids. Must be single column, without a header.
 
     Other options:
+      -profile [str]                  Configuration profile to use. Can use multiple (comma separated)
+                                      Available: standard (default), test (= test1), test1, test2, ... test4.
       --outdir [file]                 The output directory where the results will be saved
       --publish_dir_mode [str]        Mode for publishing results in the output directory. Available: symlink, rellink, link, copy, copyNoFollow, move (Default: copy)
       --email [email]                 Set this parameter to your e-mail address to get a summary e-mail with details of the run sent to you when the workflow exits
@@ -84,28 +86,6 @@ def helpMessage() {
 if (params.help) {
     helpMessage()
     exit 0
-}
-
-/*
- * SET UP CONFIGURATION VARIABLES
- */
-
-// Has the run name been specified by the user?
-// this has the bonus effect of catching both -name and --name
-custom_runName = params.name
-if (!(workflow.runName ==~ /[a-z]+_[a-z]+/)) {
-    custom_runName = workflow.runName
-}
-
-// Check AWS batch settings
-if (workflow.profile.contains('awsbatch')) {
-    // AWSBatch sanity checking
-    if (!params.awsqueue || !params.awsregion) exit 1, "Specify correct --awsqueue and --awsregion parameters on AWSBatch!"
-    // Check outdir paths to be S3 buckets if running on AWSBatch
-    // related: https://github.com/nextflow-io/nextflow/issues/813
-    if (!params.outdir.startsWith('s3:')) exit 1, "Outdir not on S3 - specify S3 Bucket to run on AWSBatch!"
-    // Prevent trace files to be stored on S3 since S3 does not support rolling files.
-    if (params.tracedir.startsWith('s3:')) exit 1, "Specify a local tracedir or run without trace! S3 cannot be used for tracefiles."
 }
 
 // Define variables
@@ -132,9 +112,23 @@ awk_expr_miss1 = params.awk_expr_miss1
 awk_expr_miss2 = params.awk_expr_miss2
 awk_expr_ab_ratio_1 = params.awk_expr_ab_ratio_1
 
+/*
+ * Check all important required inputs
+ */
+
+// Check if user provided input csv file containing paths to bcf files and their indexes
+if (!params.input) exit 1, "The list of input bcf/vcf files was not provided. \nPlease specify a csv file containing paths to bcf/vcf files and their indexes with --input [file] option. \nUse --help option for more information."
+
+// Check if user provided triodata file or files that should be generated from it by the pipeline.
+if (!params.triofile && (params.triodata_keep_pheno == params.empty_file || params.triodata_fam == params.empty_file) ) exit 1, "The list of family trios was not provided. \nPlease specify a triodata file with --triofile [file] option.\nAlternatively, you can provide ready to use .fam and .keep files with parameters\n--triodata_fam [file] and --triodata_keep_pheno [file].\nUse --help option for more information."
+
+// Check if user provided lists of male and female participants (important for handling X chromosome differently for males and females)
+if (!params.xx_sample_ids) exit 1, "The list of female participants was not provided.\nPlease specify the file with --xx_sample_ids [file] option.\nThis is important and required information because X chromosomes from female and male participants are treated differently.\nX chromosome metrics will be calculaated only using data from participants with a determined sex.\nUse --help option for more information."
+
+if (!params.xy_sample_ids) exit 1, "The list of male participants was not provided.\nPlease specify the file with --xy_sample_ids [file] option.\nThis is important and required information because X chromosomes from female and male participants are treated differently.\nX chromosome metrics will be calculaated only using data from participants with a determined sex.\nUse --help option for more information."
+
+
 // Define channels based on params
-// Input list .csv file of tissues to analyse
-// [chr10_52955340_55447336, test_all_chunks_merged_norm_chr10_52955340_55447336.bcf.gz, test_all_chunks_merged_norm_chr10_52955340_55447336.bcf.gz.csi]
 if (params.input.endsWith(".csv")) {
 
   Channel.fromPath(params.input)
@@ -199,11 +193,6 @@ summary['Launch dir']       = workflow.launchDir
 summary['Working dir']      = workflow.workDir
 summary['Script dir']       = workflow.projectDir
 summary['User']             = workflow.userName
-if (workflow.profile.contains('awsbatch')) {
-    summary['AWS Region']   = params.awsregion
-    summary['AWS Queue']    = params.awsqueue
-    summary['AWS CLI']      = params.awscli
-}
 summary['Config Profile'] = workflow.profile
 if (params.config_profile_description) summary['Config Profile Description'] = params.config_profile_description
 if (params.config_profile_contact)     summary['Config Profile Contact']     = params.config_profile_contact
@@ -212,30 +201,6 @@ summary['Config Files'] = workflow.configFiles.join(', ')
 log.info summary.collect { k,v -> "${k.padRight(18)}: $v" }.join("\n")
 log.info "-\033[2m--------------------------------------------------\033[0m-"
 
-
-// /*
-//  * Parse software version numbers
-//  */
-// process get_software_versions {
-//     publishDir "${params.outdir}/pipeline_info", mode: params.publish_dir_mode
-//         saveAs: { filename ->
-//                       if (filename.indexOf(".csv") > 0) filename
-//                       else null
-//                 }
-
-//     output:
-//     file 'software_versions_mqc.yaml' into ch_software_versions_yaml
-//     file "software_versions.csv"
-
-//     script:
-//     // TODO nf-core: Get all tools to print their version number here
-//     """
-//     echo $workflow.manifest.version > v_pipeline.txt
-//     echo $workflow.nextflow.version > v_nextflow.txt
-//     multiqc --version > v_multiqc.txt
-//     scrape_software_versions.py &> software_versions_mqc.yaml
-//     """
-// }
 
 
 // CONDITION: if triodata_fam or triodata_keep_pheno files are not provided -
@@ -782,517 +747,7 @@ process aggregate_annotation {
     """
 }
  
-//  /*
-//  * STEP - sort_compress: Sort and compress site metric data for KING step
-//  */
-// process sort_compress {
-//     publishDir "${params.outdir}/", mode: params.publish_dir_mode
 
-//     input:
-//     file annotated_variants_txt from ch_files_annotated_variants
-
-//     output:
-//     set file ("*bgz", "*tbi") into ch_files_txt
-
-//     script:
-
-//     """
-//     sort -k2 -n ${out}Annotation_newtest/BCFtools_site_metrics_SUBCOLS${i}.txt > \
-//     ${out}Annotation_newtest/BCFtools_site_metrics_SUBCOLS${i}_sorted.txt
-//     bgzip -f ${out}Annotation_newtest/BCFtools_site_metrics_SUBCOLS${i}_sorted.txt && \
-//     tabix -s1 -b2 -e2 ${out}Annotation_newtest/BCFtools_site_metrics_SUBCOLS${i}_sorted.txt.gz
-//     #rm ${out}Annotation/BCFtools_site_metrics_SUBCOLS${i}_sorted.txt &&
-//     #rm tmp_1kgp${i}.txt
-//     """
-// }
-
-// //  KING WORKFLOW
-
-// /*
-//  * STEP - filter_regions: Produce BCFs of our data filtered to sites pass sites
-//  */
-// process filter_regions {
-//     publishDir "${params.outdir}/", mode: params.publish_dir_mode
-
-//     input:
-//     file sample_bcf from ch_files_bcf
-//     file site metrics 
-//     file king_sites
-
-//     output:
-//     file "*ids.txt" into ch_files_txt
-
-//     script:
-//     """
-//     bcftools view ${bcf} \
-//     -T ${out}Annotation_newtest/BCFtools_site_metrics_SUBCOLS${i}_sorted.txt.gz  \
-//     -Ob \
-//     -o ${out}AnnotatedVCFs/regionsFiltered/${i}_regionsFiltered.bcf
-//     """
-// }
-
-// /*
-//  * STEP - consensus_and_maf_filter: Second stage filtering to give biallelic SNPs intersected with 1000KGP3 with MAF > 0.01
-//  * STEP - further_filtering:        Second stage filtering to give biallelic SNPs intersected with 1000KGP3 with MAF > 0.01
-//  */
-// process further_filtering {
-//     publishDir "${params.outdir}/", mode: params.publish_dir_mode
-
-//     input:
-//     file sample_bcf from ch_files_bcf
-
-//     output:
-//     file "*positions.txt" into ch_files_txt
-//     file "*bcf" into ch_files_bcf
-
-//     script:
-//     """
-//     bcftools view ${out}AnnotatedVCFs/regionsFiltered/${i}_regionsFiltered.bcf \
-//     -i 'INFO/OLD_MULTIALLELIC="." & INFO/OLD_CLUMPED="."' \
-//     -T ^${resources}/MichiganLD_liftover_exclude_regions.txt \
-//     -v snps  | \
-//     bcftools annotate \
-//     --set-id '%CHROM:%POS-%REF/%ALT-%INFO/OLD_CLUMPED-%INFO/OLD_MULTIALLELIC' | \
-//     bcftools +fill-tags -Ob \
-//     -o ${out}AnnotatedVCFs/regionsFiltered/MichiganLD_regionsFiltered_${i}.bcf \
-//     -- -t MAF
-//     #Produce filtered txt file
-//     bcftools query ${out}AnnotatedVCFs/regionsFiltered/MichiganLD_regionsFiltered_${i}.bcf \
-//     -i 'MAF[0]>0.01' -f '%CHROM\t%POS\t%REF\t%ALT\t%MAF\n' | \
-//     awk -F "\t" '{ if(($3 == "G" && $4 == "C") || ($3 == "A" && $4 == "T")) {next} { print $0} }' \
-//     > ${out}AnnotatedVCFs/MAF_filtered_1kp3intersect_${i}.txt
-//     """
-// }
-
-// /*
-//  * STEP - create_final_king_vcf: Produce new BCF just with filtered sites
-//  */
-// process create_final_king_vcf {
-//     publishDir "${params.outdir}/", mode: params.publish_dir_mode
-
-//     input:
-//     file agg_samples_txt from ..
-//     file filtered_regions_bcf from ..
-//     file intersected_sites_txt from ..
-    
-//     output:
-//     file "*vcf.gz*" into ch_files_vcf
-
-//     script:
-//     """
-//     #Now filter down our file to just samples we want in our GRM. This removes any withdrawals that we learned of during the process of aggregation
-//     #Store the header
-//     bcftools view \
-//     -S ${resources}78389_final_platekeys_agg_v9.txt \
-//     --force-samples \
-//     -h ${out}AnnotatedVCFs/regionsFiltered/MichiganLD_regionsFiltered_${i}.bcf \
-//     > ${out}KING/${i}_filtered.vcf
-    
-//     #Then match against all variant cols in our subsetted bcf to our maf filtered, intersected sites and only print those that are in the variant file.
-//     #Then append this to the stored header, SNPRelate needs vcfs so leave as is
-//     bcftools view \
-//     -H ${out}AnnotatedVCFs/regionsFiltered/MichiganLD_regionsFiltered_${i}.bcf \
-//     -S ${resources}78389_final_platekeys_agg_v9.txt \
-//     --force-samples \
-//     | awk -F '\t' 'NR==FNR{c[$1$2$3$4]++;next}; c[$1$2$4$5] > 0' ${out}AnnotatedVCFs/MAF_filtered_1kp3intersect_${i}.txt - >> ${out}KING/${i}_filtered.vcf
-//     bgzip ${out}KING/${i}_filtered.vcf
-//     tabix ${out}KING/${i}_filtered.vcf.gz
-//     """
-// }
-
-// /*
-//  * STEP - concat_king_vcf: Concatenate compressed vcfs to per chromosome files
-//  */
-// process concat_king_vcf {
-//     publishDir "${params.outdir}/", mode: params.publish_dir_mode
-
-//     input:
-//     file vcf_gz from ch_vcfs
-
-//     output:
-//     file "chrom*_merged_filtered.vcf.gz" into ch_vcfs_per_chromosome
-
-//     script:
-//     """
-//     find ${out}KING -type f -name "chr${i}_*.vcf.gz" > tmp.files_chrom${i}.txt
-//     bcftools concat \
-//     -f tmp.files_chrom${i}.txt \
-//     -Oz \
-//     -o ${out}perChrom_KING/chrom${i}_merged_filtered.vcf.gz && \
-//     tabix ${out}perChrom_KING/chrom${i}_merged_filtered.vcf.gz && \
-//     rm tmp.files_chrom${i}.txt
-//     """
-// }
-
-// /*
-//  * STEP - make_bed_all: Make BED files for 1000KGP3 intersected vcfs
-//  */
-
-// process make_bed_all {
-//     publishDir "${params.outdir}/", mode: params.publish_dir_mode
-
-//     input:
-//     file chr_merged_filt_vcf from ch_vcfs_per_chromosome
-
-//     output:
-//     file "*BED_*" into ch_files_beds
-
-//     script:
-
-//     """
-//     bcftools view ${out}perChrom_KING/chrom${i}_merged_filtered.vcf.gz \
-//     -Ov |\
-//     plink --vcf /dev/stdin \
-//     --vcf-half-call m \
-//     --double-id \
-//     --make-bed \
-//     --real-ref-alleles \
-//     --allow-extra-chr \
-//     --out ${out}BEDref/BED_${i}
-//     """
-// }
-
-// /*
-//  * STEP - ld_bed: LD prune SNPs
-//  */
-
-//  process ld_bed {
-//     publishDir "${params.outdir}/", mode: params.publish_dir_mode
-
-//     input:
-//     tuple bed, bim, fam from ch_files_bed
-
-//     output:
-//     file "*bed_exluded_high_ld*" into ch_files_beds
-
-//     script:
-//     """
-//     #Not considering founders in this as all of our SNPs are common
-//     plink  \
-//     --exclude range ${resources}/MichiganLD_liftover_exclude_regions_PARSED.txt \
-//     --keep-allele-order \
-//     --bfile ${out}BED/BED_${i} \
-//     --indep-pairwise 500kb 1 0.1 \
-//     --out ${out}BED/BED_LD_${i}
-    
-//     #Now that we have our correct list of SNPs (prune.in), filter the original
-//     #bed file to just these sites
-//     plink \
-//     --make-bed \
-//     --bfile ${out}BED/BED_${i} \
-//     --keep-allele-order \
-//     --extract ${out}/BED/BED_LD_${i}.prune.in \
-//     --double-id \
-//     --allow-extra-chr \
-//     --out ${out}BED/BED_LDpruned_${i}
-//     """
-// }
-
-// /*
-//  * STEP - merge_autosomes: Merge autosomes to genome wide BED files
-//  */
-
-// process merge_autosomes {
-//     publishDir "${params.outdir}/", mode: params.publish_dir_mode
-
-//     input:
-//     file chr_ld_pruned_bed from ch_files_beds.collect()
-
-//     output:
-//     file "*ids.txt" into ch_files_txt
-
-//     script:
-//     """
-//     for i in {1..22}; do
-//         echo ${out}BED/BED_LDpruned_$i >> mergelist.txt
-//     done
-//     plink --merge-list mergelist.txt \
-//     --make-bed \
-//     --out ${out}BED/autosomes_LD_pruned_1kgp3Intersect
-//     rm mergelist.txt
-//     """
-// }
-
-// /*
-//  * STEP - hwe_pruning_30k_data: Produce a first pass HWE filter
-//  * We use:
-//  * The 195k SNPs from above
-//  * The intersection bfiles (on all 80k)
-//  * Then we make BED files of unrelated individuals for each superpop (using only unrelated samples from 30k)
-//  * We do this using the inferred ancestries from the 30k
-//  */
-
-// // TODO: consider decoupling R scripts from plink scripts
-// process hwe_pruning_30k_data {
-//     publishDir "${params.outdir}/", mode: params.publish_dir_mode
-
-//     input:
-//     file sample_bcf from ch_files_bcf
-
-//     output:
-//     file "*ids.txt" into ch_files_txt
-
-//     script:
-//     """
-//     R -e 'library(data.table) 
-//     library(dplyr) 
-//     dat <- fread("aggV2_R9_M30K_1KGP3_ancestry_assignment_probs.tsv") %>% as_tibble();
-//     unrels <- fread("/re_gecip/BRS/thanos/aggV2_bedmerge_30KSNPs_labkeyV9_08062020_update_PCsancestryrelated.tsv") %>% as_tibble() %>% filter(unrelated_set == 1);
-//     dat <- dat %>% filter(plate_key %in% unrels$plate_key);
-//     for(col in c("AFR","EUR","SAS","EAS")){dat[dat[col]>0.8,c("plate_key",col)] %>% write.table(paste0(col,"pop.txt"), quote = F, row.names=F, sep = "\t")}'
-
-//     bedmain="${out}/BED/autosomes_LD_pruned_1kgp3Intersect"
-//     for pop in AFR EUR SAS EAS; do
-//         echo ${pop}
-//         awk '{print $1"\t"$1}' ${pop}pop.txt > ${pop}keep
-//         plink \
-//         --keep ${pop}keep \
-//         --make-bed \
-//         --bfile ${bedmain} \
-//         --out ${pop}
-        
-//         plink --bfile ${pop} --hardy --out ${pop} --nonfounders
-//     done
-
-//     #Combine the HWE and produce a list of pass 
-//     R -e 'library(data.table);
-//     library(dplyr);
-//     dat <- lapply(c("EUR.hwe","AFR.hwe", "SAS.hwe", "EAS.hwe"),fread);
-//     names(dat) <- c("EUR.hwe","AFR.hwe", "SAS.hwe", "EAS.hwe");
-//     dat <- dat %>% bind_rows(.id="id");
-//     write.table(dat, "combinedHWE.txt", row.names = F, quote = F)'
-//     R -e 'library(dplyr); library(data.table);
-//         dat <- fread("combinedHWE.txt") %>% as_tibble()
-//         #Create set that is just SNPS that are >10e-6 in all pops
-//         dat %>% filter(P >10e-6) %>% group_by(SNP) %>% count() %>% filter(n==4) %>% select(SNP) %>% distinct() %>%
-//         write.table("hwe10e-6_superpops_195ksnps", sep="\t", row.names = F, quote = F)
-//         '
-//     R -e 'library(dplyr); library(data.table);
-//         dat <- fread("combinedHWE.txt") %>% as_tibble()
-//         #Create set that is just SNPS that are >10e-2 in all pops
-//         dat %>% filter(P >10e-2) %>% group_by(SNP) %>% count() %>% filter(n==4) %>% select(SNP) %>% distinct() %>%
-//         write.table("hwe10e-2_superpops_195ksnps", sep="\t", row.names = F, quote = F)'
-//     """
-// }
-
-// /*
-//  * STEP - get_king_coeffs: 
-//  */
-
-// process get_king_coeffs {
-//     publishDir "${params.outdir}/", mode: params.publish_dir_mode
-
-//     input:
-//     file sample_bcf from ch_files_bcf
-
-//     output:
-//     file "*ids.txt" into ch_files_txt
-
-//     script:
-
-//     """
-//     plink2 --bfile \
-//     ${out}BED/autosomes_LD_pruned_1kgp3Intersect \
-//     --make-king square \
-//     --out \
-//     ${out}KING/matrix/autosomes_LD_pruned_1kgp3Intersect \
-//     --thread-num 30
-//     """
-// }
-
-// /*
-//  * STEP - get_king_coeffs_alt
-//  * Daniel's notes:
-//  * The main difference for this is that we are aiming to do all the pcAIR
-//  * using other tools. Therefore the output needs to be different
-//  */
-
-// process get_king_coeffs_alt {
-//     publishDir "${params.outdir}/", mode: params.publish_dir_mode
-
-//     input:
-//     file sample_bcf from ch_files_bcf
-
-//     output:
-//     file "*ids.txt" into ch_files_txt
-
-//     script:
-
-//     """
-//     plink2 --bfile \
-//     ${out}BED/autosomes_LD_pruned_1kgp3Intersect \
-//     --make-king triangle bin \
-//     --out \
-//     ${out}KING/matrix/autosomes_LD_pruned_1kgp3Intersect_triangle \
-//     --thread-num 30
-//     """
-// }
-
-// /*
-//  * STEP - pcair_alternate: 
-//  * Daniel's notes:
-//  * This isn't actually intended to run as a function, it is just to stop stuff running
-//  * when sourcing this file that we wrap it in a function
-//  * Alternate approach to producing the PC-relate info
-//  */
-
-// process pcair_alternate {
-//     publishDir "${params.outdir}/", mode: params.publish_dir_mode
-
-//     input:
-//     file sample_bcf from ch_files_bcf
-
-//     output:
-//     file "*ids.txt" into ch_files_txt
-
-//     script:
-
-//     """
-//     plink2 --bfile ${out}BED/autosomes_LD_pruned_1kgp3Intersect \
-//        --king-cutoff ${out}KING/matrix/autosomes_LD_pruned_1kgp3Intersect_triangle 0.0442 && \
-//        mv plink2.king.cutoff.in.id autosomes_LD_pruned_1kgp3Intersect.king.cutoff.in.id && \
-//        mv plink2.king.cutoff.out.id autosomes_LD_pruned_1kgp3Intersect.king.cutoff.out.id
-
-
-//     ##Partitions for the alternate triangles
-//     plink2 --bfile ${out}BED/autosomes_LD_pruned_1kgp3Intersect \
-//        --king-cutoff ${out}KING/matrix/autosomes_LD_pruned_1kgp3Intersect_triangle_HWE10_2 0.0442 && \
-//        mv plink2.king.cutoff.in.id  autosomes_LD_pruned_1kgp3Intersect_triangle_HWE10_2.king.cutoff.in.id && \
-//        mv plink2.king.cutoff.out.id  autosomes_LD_pruned_1kgp3Intersect_triangle_HWE10_2.king.cutoff.out.id
-//     plink2 --bfile ${out}BED/autosomes_LD_pruned_1kgp3Intersect \
-//        --king-cutoff ${out}KING/matrix/autosomes_LD_pruned_1kgp3Intersect_triangle_HWE10_6 0.0442 && \
-//        mv plink2.king.cutoff.in.id  autosomes_LD_pruned_1kgp3Intersect_triangle_HWE10_6.king.cutoff.in.id && \
-//        mv plink2.king.cutoff.out.id  autosomes_LD_pruned_1kgp3Intersect_triangle_HWE10_6.king.cutoff.out.id
-
-//     #Let's now have a look at how muhc overlaps in the kinship based on the HWE cutoffs
-//     R -e 'library(data.table); library(dplyr); library(magrittr);
-//         dat <- fread("autosomes_LD_pruned_1kgp3Intersect.king.cutoff.in.id") %>% as_tibble();
-//         hwe2 <- fread("autosomes_LD_pruned_1kgp3Intersect_triangle_HWE10_2.king.cutoff.in.id") %>% as_tibble();
-//         hwe6 <- fread("autosomes_LD_pruned_1kgp3Intersect_triangle_HWE10_6.king.cutoff.in.id") %>% as_tibble();
-//         dat <- bind_rows(dat, hwe2, hwe6, .id="id");
-//         dat %>% group_by(id) %>% summarise(n()); 
-//         dat %>% group_by(IID) %>% summarise(n=n()) %>% count(n)  '
-
-//     #Filter the file
-//     plink2 --bfile ${out}BED/autosomes_LD_pruned_1kgp3Intersect \
-//     --make-bed \
-//     --keep ${out}KING/matrix/plink2.king.cutoff.in.id \
-//     --out ${out}KING/matrix/autosomes_LD_pruned_1kgp3Intersect_unrelated
-
-//     #Also produce a related set
-//     #Filter the file
-//     plink2 --bfile ${out}BED/autosomes_LD_pruned_1kgp3Intersect \
-//     --make-bed \
-//     --remove ${out}KING/matrix/plink2.king.cutoff.in.id \
-//     --out ${out}KING/matrix/autosomes_LD_pruned_1kgp3Intersect_related
-//     """
-//  }
-
-// /*
-//  * STEP - prep_hwe: Produce list of samples by super pop (probability > 0.8)
-//  */
-
-// process prep_hwe {
-//     publishDir "${params.outdir}/", mode: params.publish_dir_mode
-
-//     input:
-//     file sample_bcf from ch_files_bcf
-
-//     output:
-//     file "*ids.txt" into ch_files_txt
-
-//     script:
-
-//     """
-//     tee prep_hwe.R <<EOF  
-//     library(data.table)
-//     library(dplyr)
-//          dat <- fread("/re_gecip/shared_allGeCIPs/drhodes/Aggregation_79k/out_actual/Ancestries/aggV2_ancestry_assignment_probs_1KGP3_200K.tsv") %>% as_tibble()
-//         for(col in c("AFR","EUR","SAS","EAS")){dat[dat[col]>0.8,c("Sample",col)] %>%
-//         write.table(paste0('/re_gecip/shared_allGeCIPs/drhodes/Aggregation_79k/out_actual/Ancestries/',col,"pop.txt"), quote = F, row.names=F, sep = "\t")};
-//     EOF
-//     chmod +x prep_hwe.R
-//     Rscript prep_hwe.R
-//     #Produce an unrelated version of each of these lists too
-//     for pop in AFR EUR SAS EAS; do
-//         echo -e "Running ${pop}..."
-//         awk 'NR==FNR{a[$2]; next} ($1) in a' ${out}KING/matrix/autosomes_LD_pruned_1kgp3Intersect_triangle_HWE10_6.king.cutoff.in.id ${out}/Ancestries/${pop}pop.txt > \
-//         ${out}/Ancestries/${pop}_unrelated.txt
-//         awk '{print $1"\t"$1}' ${out}/Ancestries/${pop}_unrelated.txt > ${out}/Ancestries/${pop}_unrelated.keep
-//     done
-//     wc -l ${out}/Ancestries/*_unrelated.txt
-//     """
-// }
-
-
-// /*
-//  * STEP - prep_hwe: Produce list of samples by super pop (probability > 0.8)
-//  * NOTES:
-//  * Taking the files produced in prep_hwe, run HWE on each subset of samples for each file.
-//  * It would be faste rto parallelise across files too, but the super-pops apart from EUR shouldn't
-//  * take too long
-//  */
-
-// process p_hwe {
-//     publishDir "${params.outdir}/", mode: params.publish_dir_mode
-
-//     input:
-//     file sample_bcf from ch_files_bcf
-
-//     output:
-//     file "*ids.txt" into ch_files_txt
-
-//     script:
-
-//     """
-//     for pop in AFR EUR SAS EAS; do
-//         echo -e "Calculating HWE on ${pop} samples..."
-//         plink --bcf ${bcf} \
-//         --hardy midp \
-//         --keep ${out}/Ancestries/${pop}_unrelated.keep \
-//         --double-id \
-//         --allow-extra-chr \
-//         --out ${out}/HWE/${i}_$pop
-//     done
-//     """
-// }
-
-// /*
-//  * STEP - end_aggregate_annotation: Annotate and make pass/fail. print subset of cols
-//  * NOTES:
-//  * Taking the files produced in prep_hwe, run HWE on each subset of samples for each file.
-//  * It would be faste rto parallelise across files too, but the super-pops apart from EUR shouldn't
-//  * take too long
-//  */
-
-// process end_aggregate_annotation {
-//     publishDir "${params.outdir}/", mode: params.publish_dir_mode
-
-//     input:
-//     file sample_bcf from ch_files_bcf
-
-//     output:
-//     file "annotated_variants.txt" into ch_files_txt
-
-//     script:
-//     """
-//     annotatePerChunk.R \
-//     ${i} \
-//     ${out}startfile/start_file_${i} \
-//     ${out}missing2/missing1_${i} \
-//     ${out}missing2/missing2_${i} \
-//     ${out}medianCoverageAll/medianCoverageAll${i} \
-//     ${out}medianCoverageNonMiss/medianNonMiss_depth_${i} \
-//     ${out}medianGQ/medianGQ_${i} \
-//     ${out}AB_hetAll/hetAll_${i} \
-//     ${out}AB_hetPass/hetPass_${i} \
-//     ${out}MendelErrSites/MendErr_${i}.lmendel \
-//     ${out}Annotation_final \
-//     ${resources}/N_samples \
-//     ${out}AC_counts/${i}_AC \
-//     ignore #unused arg in this argument
-//     """
-// }
 
 def nfcoreHeader() {
     // Log colors ANSI codes
@@ -1310,23 +765,3 @@ def nfcoreHeader() {
     """.stripIndent()
 }
 
-def checkHostname() {
-    def c_reset = params.monochrome_logs ? '' : "\033[0m"
-    def c_white = params.monochrome_logs ? '' : "\033[0;37m"
-    def c_red = params.monochrome_logs ? '' : "\033[1;91m"
-    def c_yellow_bold = params.monochrome_logs ? '' : "\033[1;93m"
-    if (params.hostnames) {
-        def hostname = "hostname".execute().text.trim()
-        params.hostnames.each { prof, hnames ->
-            hnames.each { hname ->
-                if (hostname.contains(hname) && !workflow.profile.contains(prof)) {
-                    log.error "====================================================\n" +
-                            "  ${c_red}WARNING!${c_reset} You are running with `-profile $workflow.profile`\n" +
-                            "  but your machine hostname is ${c_white}'$hostname'${c_reset}\n" +
-                            "  ${c_yellow_bold}It's highly recommended that you use `-profile $prof${c_reset}`\n" +
-                            "============================================================"
-                }
-            }
-        }
-    }
-}

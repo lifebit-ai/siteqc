@@ -1,0 +1,92 @@
+name: nf-core CI
+on: [push, pull_request]
+
+jobs:
+  # Test with maximal number of processes being run
+  test_full:
+    env:
+      NXF_VER: ${{ matrix.nxf_ver }}
+      NXF_ANSI_LOG: false
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        nxf_ver: ['19.10.0', '']
+    steps:
+      - uses: actions/checkout@v2
+      - name: Install Nextflow
+        run: |
+          wget -qO- get.nextflow.io | bash
+          sudo mv nextflow /usr/local/bin/
+      - name: Pull docker image
+        run: |
+          docker pull lifebitai/annotate:dev
+          docker tag lifebitai/annotate:dev lifebitai/annotate:dev
+      - name: Run pipeline with test data so that all processes are triggered
+        run: |
+          nextflow run ${GITHUB_WORKSPACE} -profile test_full
+  # Test with minimal processes being run by providing two important sets of intermediate files
+  test_triodata_keep_provided:
+    env:
+      NXF_VER: ${{ matrix.nxf_ver }}
+      NXF_ANSI_LOG: false
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        nxf_ver: ['19.10.0', '']
+    steps:
+      - uses: actions/checkout@v2
+      - name: Install Nextflow
+        run: |
+          wget -qO- get.nextflow.io | bash
+          sudo mv nextflow /usr/local/bin/
+      - name: Pull docker image
+        run: |
+          docker pull lifebitai/annotate:dev
+          docker tag lifebitai/annotate:dev lifebitai/annotate:dev
+      - name: Run pipeline with test data of triodata and keep file for mend_err_p3 provided
+        run: |
+          nextflow run ${GITHUB_WORKSPACE} -profile test_triodata_keep_provided
+  # Test with triodata_define processes skipped by providing important set of triodata files
+  test_triodata_provided:
+    env:
+      NXF_VER: ${{ matrix.nxf_ver }}
+      NXF_ANSI_LOG: false
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        nxf_ver: ['19.10.0', '']
+    steps:
+      - uses: actions/checkout@v2
+      - name: Install Nextflow
+        run: |
+          wget -qO- get.nextflow.io | bash
+          sudo mv nextflow /usr/local/bin/
+      - name: Pull docker image
+        run: |
+          docker pull lifebitai/annotate:dev
+          docker tag lifebitai/annotate:dev lifebitai/annotate:dev
+      - name: Run pipeline with test data of triodata and keep file for mend_err_p3 provided
+        run: |
+         nextflow run ${GITHUB_WORKSPACE} -profile test_triodata_provided
+  # Test with mend_err_p2 processes skipped by providing file with list of 4SD families to keep
+  test_keep_provided:
+    env:
+      NXF_VER: ${{ matrix.nxf_ver }}
+      NXF_ANSI_LOG: false
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        nxf_ver: ['19.10.0', '']
+    steps:
+      - uses: actions/checkout@v2
+      - name: Install Nextflow
+        run: |
+          wget -qO- get.nextflow.io | bash
+          sudo mv nextflow /usr/local/bin/
+      - name: Pull docker image
+        run: |
+          docker pull lifebitai/annotate:dev
+          docker tag lifebitai/annotate:dev lifebitai/annotate:dev
+      - name: Run pipeline with test data of keep file for mend_err_p3 provided
+        run: |
+          nextflow run ${GITHUB_WORKSPACE} -profile test_keep_provided
