@@ -135,6 +135,8 @@ if (params.input.endsWith(".csv")) {
                         .ifEmpty { exit 1, "Input .csv list of input tissues not found at ${params.input}. Is the file path correct?" }
                         .splitCsv(sep: ',',  skip: 1)
                         .map { bcf, index -> ['chr'+file(bcf).simpleName.split('_chr').last() , file(bcf), file(index)] }
+                        // Filter out chunks from chrY and chrM - they should not be analysed in SiteQC pipeline
+                        .filter { it[0] =~ /chr[^YM]/ }
                         .set { ch_bcfs }
 
   Channel.fromPath(params.input)
@@ -142,6 +144,8 @@ if (params.input.endsWith(".csv")) {
          .splitCsv(sep: ',',  skip: 1)
          .map { bcf, index -> ['chr'+file(bcf).simpleName.split('_chr').last().split('_').first(),
                                file("${params.s3_path_1kg_start}" + 'chr'+file(bcf).simpleName.split('_chr').last().split('_').first() + "${params.s3_path_1kg_end}") ] }
+         // Do not use 1kg files chunks from chrY  and chrM  - they should not be analysed in SiteQC pipeline
+         .filter { it[0] =~ /chr[^YM]/ }
          .set { ch_1kg_archives }
 
 }
