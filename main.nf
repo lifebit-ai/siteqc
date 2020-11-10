@@ -608,7 +608,7 @@ process pull_1kg_p3_sites {
 
      script:
      """
-     plink2 --bcf ${bcf} \
+     plink2 --vcf ${bcf} \
      --make-bed \
      --set-missing-var-ids ${params.mend_err_p1_rset_missing_var_ids} \
      --vcf-half-call ${params.mend_err_p1_vcf_half_call} \
