@@ -298,8 +298,8 @@ process start_file {
 
     script:
     """
-    if [[ $region == *"chrX"* ]] || [[ $region == *"chrY"* ]] ; then
-      bcftools query -f '${query_format_start}' ${bcf} -o start_file_${region}_XY -S ${xy_sample_ids} 
+    if [[ $region == *"chrX"* ]]; then
+      bcftools query -f '${query_format_start}' ${bcf} -o start_file_${region}_XY -S ${xy_sample_ids}
       bcftools query -f '${query_format_start}' ${bcf} -o start_file_${region}_XX -S ${xx_sample_ids}
     else
       bcftools query -f '${query_format_start}' ${bcf} -o start_file_${region}
@@ -323,7 +323,7 @@ process missingness_1 {
 
     script:
     """
-    if [[ $region == *"chrX"* ]] || [[ $region == *"chrY"* ]] ; then
+    if [[ $region == *"chrX"* ]]; then
         bcftools query ${bcf} -f '${query_format_miss1}' -i '${query_include_miss1}' -S ${xy_sample_ids} | awk '${awk_expr_miss1}' > missing1_${region}_XY
         bcftools query ${bcf} -f '${query_format_miss1}' -i '${query_include_miss1}' -S ${xy_sample_ids} | awk '${awk_expr_miss1}' > missing1_${region}_XY
     else
@@ -348,9 +348,9 @@ process missingness_2 {
 
     script:
     """
-    if [[ $region == *"chrX"* ]] || [[ $region == *"chrY"* ]] ; then
+    if [[ $region == *"chrX"* ]]; then
         bcftools query ${bcf} -f '${query_format_miss2}' -e '${query_exclude_miss2}' -S ${xy_sample_ids} | awk '${awk_expr_miss2}' > missing2_${region}_XY
-        bcftools query ${bcf} -f '${query_format_miss2}' -e '${query_exclude_miss2}' -S ${xx_sample_ids} | awk '${awk_expr_miss2}' > missing2_${region}_XX        
+        bcftools query ${bcf} -f '${query_format_miss2}' -e '${query_exclude_miss2}' -S ${xx_sample_ids} | awk '${awk_expr_miss2}' > missing2_${region}_XX
     else
         bcftools query ${bcf} -f '${query_format_miss2}' -e '${query_exclude_miss2}' | awk '${awk_expr_miss2}' > missing2_${region}
     fi
@@ -399,7 +399,7 @@ process complete_sites {
 
      script:
      """
-     if [[ $region == *"chrX"* ]] || [[ $region == *"chrY"* ]] ; then
+     if [[ $region == *"chrX"* ]]; then
          bcftools query ${bcf} -f '${query_format_med_cov_all}' -S ${xy_sample_ids} | awk '${awk_expr_med_cov_all}' > medianCoverageAll${region}_XY
          bcftools query ${bcf} -f '${query_format_med_cov_all}' -S ${xy_sample_ids} | awk '${awk_expr_med_cov_all}' > medianCoverageAll${region}_XX 
      else
@@ -426,7 +426,7 @@ process complete_sites {
      script:
 
      """
-     if [[ $region == *"chrX"* ]] || [[ $region == *"chrY"* ]] ; then
+     if [[ $region == *"chrX"* ]]; then
          bcftools query ${bcf} -f '${query_format_med_cov_nonmisss}' -e '${query_exclude_med_cov_nonmiss}' -S ${xy_sample_ids} | awk '${awk_expr_med_cov_nonmiss}' > medianNonMiss_depth_${region}_XY
          bcftools query ${bcf} -f '${query_format_med_cov_nonmisss}' -e '${query_exclude_med_cov_nonmiss}' -S ${xx_sample_ids} | awk '${awk_expr_med_cov_nonmiss}' > medianNonMiss_depth_${region}_XX
      else
@@ -451,7 +451,7 @@ process complete_sites {
 
      script:
      """
-     if [[ $region == *"chrX"* ]] || [[ $region == *"chrY"* ]] ; then
+     if [[ $region == *"chrX"* ]]; then
          bcftools query ${bcf} -f '${query_format_median_gq}' -e '${query_exclude_median_gq}' -S ${xy_sample_ids} | awk '${awk_expr_median_gq}'  > medianGQ_${region}_XY
          bcftools query ${bcf} -f '${query_format_median_gq}' -e '${query_exclude_median_gq}' -S ${xx_sample_ids} | awk '${awk_expr_median_gq}'  > medianGQ_${region}_XX
      else
@@ -479,7 +479,7 @@ process complete_sites {
 
      """
      #We only calculate AB ratio for XX
-     if [[ $region == *"chrX"* ]] || [[ $region == *"chrY"* ]] ; then
+     if [[ $region == *"chrX"* ]]; then
          bcftools query ${bcf} -f '${query_format_ab_ratio_p1}' -S ${xx_sample_ids} -i '${query_include_ab_ratio_1}' | awk '${awk_expr_ab_ratio_1}' > hetPass_${region}_XX
      else
          bcftools query ${bcf} -f '${query_format_ab_ratio_p1}' -i '${query_include_ab_ratio_1}' | awk '${awk_expr_ab_ratio_1}' > hetPass_${region}
@@ -490,7 +490,6 @@ process complete_sites {
 //  /*
 //  * STEP - ab_ratio_p2: Number of het GTs for p2 AB ratio
 //  */
- 
 
 
 
@@ -509,7 +508,7 @@ process ab_ratio_p2 {
     script:
     """
     # We only calculate AB ratio for XX
-    if [[ $region == *"chrX"* ]] || [[ $region == *"chrY"* ]] ; then
+    if [[ $region == *"chrX"* ]]; then
         bcftools query ${bcf} -f '${query_format_ab_ratio_p2}' -S ${xx_sample_ids} -i '${query_include_ab_ratio_2}' | awk '${awk_expr_ab_ratio_1}' > hetAll_${region}_XX
     else
         bcftools query ${bcf} -f '${query_format_ab_ratio_p2}' -i '${query_include_ab_ratio_2}' | awk '${awk_expr_ab_ratio_1}' > hetAll_${region}
@@ -750,7 +749,7 @@ process aggregate_annotation {
     ${params.king}
     """
 }
- 
+
 
 
 def nfcoreHeader() {
