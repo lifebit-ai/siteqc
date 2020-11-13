@@ -171,7 +171,8 @@ Channel.fromPath(params.xy_sample_ids, checkIfExists: true)
                             ch_xy_sample_id_med_cov_non_miss;
                             ch_xy_sample_id_median_gq;
                             ch_xy_sample_id_ab_ratio_p1;
-                            ch_xy_sample_id_ab_ratio_p2 }
+                            ch_xy_sample_id_ab_ratio_p2;
+                            ch_xy_sample_id_complete_sites }
 Channel.fromPath(params.xx_sample_ids, checkIfExists: true)
                     .into { ch_xx_sample_id_start_file;
                             ch_xx_sample_id_miss1;
@@ -180,7 +181,8 @@ Channel.fromPath(params.xx_sample_ids, checkIfExists: true)
                             ch_xx_sample_id_med_cov_non_miss;
                             ch_xx_sample_id_median_gq;
                             ch_xx_sample_id_ab_ratio_p1;
-                            ch_xx_sample_id_ab_ratio_p2 }
+                            ch_xx_sample_id_ab_ratio_p2;
+                            ch_xx_sample_id_complete_sites }
 
 
 // Header log info
@@ -356,27 +358,41 @@ process missingness_2 {
  }
 
  /*
- * STEP - complete_sites: Make sure the number of samples is listed in resources
+ * STEP - complete_sites: Count the number of participants in autosomal bcfs, and also count separately female and male participants for chrX
  */
 
-// Suggestion: process count_samples {
-// TODO: Check with Daniel if the N count should be per bcf
+// To count participants we need only one autosomal bcf, but additionally also one bcf for chrX.
+// For this I fork general bcf input channel into autosomal bcfs and chrX bcfs, randomly select one bcf from each branch,
+// and combine two bcfs back in one channel.
+ch_bcfs_complete_sites
+        .branch {
+            autosomes: it[0] =~ /chr[^X]/
+            chrX: it[0] =~ /chrX/
+        }
+        .set { ch_bcfs_split }
+
+ch_bcf_1_autos_1_X = ch_bcfs_split.autosomes.randomSample(1)
+                     .mix(ch_bcfs_split.chrX.randomSample(1))
+
 process complete_sites {
     publishDir "${params.outdir}/", mode: params.publish_dir_mode
 
     input:
-    set val(region), file(bcf), file(index) from ch_bcfs_complete_sites
+    set val(region), file(bcf), file(index) from ch_bcf_1_autos_1_X
+    each file(xy_sample_ids) from ch_xy_sample_id_complete_sites
+    each file(xx_sample_ids) from ch_xx_sample_id_complete_sites
 
     output:
-    set val(region), file("*N_samples.txt") into ch_n_samples_files
+    set val(region), file("*N_samples*") into ch_n_samples_files
 
     script:
-    // if [ ! -f "${resources}/N_samples" ]; then
-    //     bsub -q short -P bio -e logs/n_samples_err%J -o logs/n_samples_out%J 
-    //   'module load ${bcf}toolsLoad; 
     """
-    n_samples=`bcftools query -l ${bcf} | wc -l`
-    bcftools query -l ${bcf} | wc -l > ${region}_N_samples.txt
+    if [[ $region == *"chrX"* ]]; then
+        bcftools query -l ${bcf} -S ${xy_sample_ids} | wc -l > sex_chr_N_samples_XY
+        bcftools query -l ${bcf} -S ${xx_sample_ids} | wc -l > sex_chr_N_samples_XX
+    else
+        bcftools query -l ${bcf} | wc -l > autosomes_N_samples
+    fi
     """
  }
 
@@ -701,10 +717,19 @@ ch_joined_outputs_to_aggregate =
          .join(ch_outputs_ab_ratio_p2)
          .join(ch_outputs_ab_ratio_p1)
          .join(ch_mend_err_p3_out)
-         .join(ch_n_samples_files)
          .join(ch_outputs_pull_ac)
          //excluding chrX files because it doesn't need to go to Ancestry and relatedness pipeline.
          .filter { it[0] =~ /chr[^X]/ }
+         //There will be only 1 N_samples file for all autosomes, but we have to include it in each bcf tuple.
+         //.combine() operator makes sure each autosomal bcf tuple gets it,
+         //.filter() removes two chrX N_samples count files that we don't need here.
+         //.map() removes first element of tuple for n_samples channel that is region value that we used to filter only autosomal n_counts file.
+         .combine(ch_n_samples_files
+                    .filter { it[0] =~ /chr[^X]/ }
+                    .map { region, n_file -> [n_file]}
+         )
+         .view()
+
 
 
 process aggregate_annotation {
@@ -722,8 +747,8 @@ process aggregate_annotation {
           file(hetAll),
           file(hetPass),
           file(MendErr),
-          file(N_samples),
-          file(AC_counts) from ch_joined_outputs_to_aggregate
+          file(AC_counts),
+          file(N_samples) from ch_joined_outputs_to_aggregate
 
     output:
     file "BCFtools_site_metrics_*.txt" into ch_aggr_annotation_1
