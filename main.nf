@@ -145,7 +145,8 @@ if (params.input.endsWith(".csv")) {
          .map { bcf, index -> ['chr'+file(bcf).simpleName.split('_chr').last().split('_').first(),
                                file("${params.s3_path_1kg_start}" + 'chr'+file(bcf).simpleName.split('_chr').last().split('_').first() + "${params.s3_path_1kg_end}") ] }
          // Do not use 1kg files chunks from chrY  and chrM  - they should not be analysed in SiteQC pipeline
-         .filter { it[0] =~ /chr[^YM]/ }
+         // And chrX - as 1000genomes files are only used in annotation step, from which chrX is excluded.
+         .filter { it[0] =~ /chr[^XYM]/ }
          .set { ch_1kg_archives }
 
 }
@@ -705,6 +706,8 @@ ch_joined_outputs_to_aggregate =
          .join(ch_mend_err_p3_out)
          .join(ch_n_samples_files)
          .join(ch_outputs_pull_ac)
+         //excluding chrX files because it doesn't need to go to Ancestry and relatedness pipeline.
+         .filter { it[0] =~ /chr[^X]/ }
 
 
 process aggregate_annotation {
