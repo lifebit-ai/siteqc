@@ -576,7 +576,7 @@ process pull_1kg_p3_sites {
      publishDir "${params.outdir}/MendelErr/", mode: params.publish_dir_mode
 
      input:
-     set val(region), file(bcf), file(index) from ch_bcfs_mend_err_p1 
+     set val(region), file(bcf), file(index) from ch_bcfs_mend_err_p1
      each file(triodata_keep_file) from ch_triodata_keep_pheno
 
      output:
@@ -589,7 +589,9 @@ process pull_1kg_p3_sites {
 
 
      script:
-     """
+	 // Plink needs memory specified in Mb, not how nextflow passes it as '6 GB'.
+     memory_in_Mb = task.memory.toString().split(' ')[0].toInteger() * 1000
+	 """
      plink2 --bcf ${bcf} \
      --make-bed \
      --set-missing-var-ids ${params.mend_err_p1_rset_missing_var_ids} \
@@ -599,7 +601,9 @@ process pull_1kg_p3_sites {
      --real-ref-alleles \
      --allow-extra-chr \
      --out BED_trio_${region} \
-     --keep ${triodata_keep_file}
+     --keep ${triodata_keep_file} \
+     --threads $task.cpus \
+     --memory ${memory_in_Mb}
      """
  }
 
