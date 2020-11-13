@@ -192,15 +192,6 @@ if (workflow.revision) summary['Pipeline Release'] = workflow.revision
 // TODO nf-core: Report custom parameters here
 summary['Max Resources']    = "$params.max_memory memory, $params.max_cpus cpus, $params.max_time time per job"
 if (workflow.containerEngine) summary['Container'] = "$workflow.containerEngine - $workflow.container"
-summary['Input file']       = params.input
-summary['Included samples'] = params.included_samples
-summary['XX sample ids']    = params.xx_sample_ids
-summary['XY sample ids']    = params.xy_sample_ids
-summary['Updfile']          = params.updfile
-summary['Triofile']         = params.triofile
-summary['Triodata keep']    = params.triodata_keep_pheno
-summary['Triodata fam file']= params.triodata_fam
-summary['mend_err_p3_keep_fam']= params.mend_err_p3_keep_fam
 summary['Output dir']       = params.outdir
 summary['Launch dir']       = workflow.launchDir
 summary['Working dir']      = workflow.workDir
@@ -253,7 +244,7 @@ if (params.triodata_keep_pheno == params.empty_file || params.triodata_fam == pa
       file(updfile) from ch_updfile
 
       output:
-      file("triodata.fam") into ch_mend_err_p2_fam, ch_mend_err_p3_fam
+      file("triodata.fam") into ch_triodata_fam
       file("keep.txt") into ch_triodata_keep_pheno
       script:
       """
@@ -271,16 +262,26 @@ if (params.triodata_keep_pheno != params.empty_file && params.triodata_fam != pa
 
   Channel
     .fromPath(params.triodata_fam)
-    .into { ch_mend_err_p2_fam;
-            ch_mend_err_p3_fam }
+    .set {ch_triodata_fam}
 
 }
 //END OF CONDIION
+
+(ch_mend_err_p2_fam,
+ ch_mend_err_p3_fam) = ch_triodata_fam.into(2)
 
 
 /*
  * STEP - start_file:  Create a backbone of IDs for other data to be joined to
  */
+// TODO redefine logic of "if "$sexChrom", capture substring from basename?
+// #Sample lists for XX/XY QC
+//xx='xx_females_illumina_ploidy_samples_40740.tsv'
+//xy='xy_males_illumina_ploidy_samples_35924.tsv'
+// bcftools query -S, --samples-file <file>         file of samples to include
+// head results/startfiles/start_file_chr10_52955340_55447336 
+// chr10 52955340 A G
+// chr10 52955649 T C
 process start_file {
     publishDir "${params.outdir}/startfiles/", mode: params.publish_dir_mode
 
@@ -291,6 +292,9 @@ process start_file {
 
     output:
     tuple val(region), file("start_file_*") into ch_template_startfiles
+    // head results/startfiles/start_file_chr10_52955340_55447336 
+    // chr10 52955340 A G
+    // chr10 52955649 T C
 
     script:
     """
@@ -395,6 +399,7 @@ process complete_sites {
  /*
  * STEP - median_coverage_all: Produce median value for depth across all GT
  */
+
  process median_coverage_all {
      publishDir "${params.outdir}/median_coverage_all/", mode: params.publish_dir_mode
 
@@ -417,9 +422,10 @@ process complete_sites {
      """
   }
 
-/*
-* STEP - median_coverage_non_miss: Median coverage for fully present genotypes
-*/
+//  /*
+//  * STEP - median_coverage_non_miss: Median coverage for fully present genotypes
+//  */
+
  process median_coverage_non_miss {
      publishDir "${params.outdir}/medianCoverageNonMiss/", mode: params.publish_dir_mode
 
@@ -443,9 +449,9 @@ process complete_sites {
      """
   }
 
-/*
-* STEP - median_gq: Calculate median GQ
-*/
+//  /*
+//  * STEP - median_gq: Calculate median GQ
+//  */
  process median_gq {
      publishDir "${params.outdir}/medianGQ", mode: params.publish_dir_mode
 
@@ -468,9 +474,10 @@ process complete_sites {
      """
   }
 
-/*
-* STEP - ab_ratio_p1: AB ratio calculation - number of hets passing binomial test (reads supporting het call)
-*/
+//  /*
+//  * STEP - ab_ratio_p1: AB ratio calculation - number of hets passing binomial test (reads supporting het call)
+//  */
+
  process ab_ratio_p1 {
      publishDir "${params.outdir}/AB_hetPass/", mode: params.publish_dir_mode
 
@@ -494,9 +501,13 @@ process complete_sites {
      """
   }
 
-/*
-* STEP - ab_ratio_p2: Number of het GTs for p2 AB ratio
-*/
+//  /*
+//  * STEP - ab_ratio_p2: Number of het GTs for p2 AB ratio
+//  */
+
+
+
+
 process ab_ratio_p2 {
     publishDir "${params.outdir}/AB_hetAll", mode: params.publish_dir_mode
 
@@ -519,16 +530,16 @@ process ab_ratio_p2 {
     """
  }
 
-
  /*
  * STEP - pull_ac: Pull AC from all files and store for addition to site metrics
  */
+// TODO: What subfolder do we need to store the files in?
 process pull_ac {
     publishDir "${params.outdir}/AC_counts/", mode: params.publish_dir_mode
 
     input:
     set val(region), file(bcf), file(index) from ch_bcfs_pull_ac
-
+    
     output:
     tuple val(region), file("*_AC") into ch_outputs_pull_ac
 
@@ -537,7 +548,6 @@ process pull_ac {
     bcftools query ${bcf} -f '${query_format_pull_ac}' > ${region}_AC
     """
  }
-
 
 /*
  * STEP - pull_1kg_p3_sites: Pull sites from 1000KGP3
@@ -559,7 +569,6 @@ process pull_1kg_p3_sites {
     """
 }
 
-
   /*
   * STEP - mend_err_p1: Create a bed file for the mendel error calcs
   */
@@ -567,7 +576,7 @@ process pull_1kg_p3_sites {
      publishDir "${params.outdir}/MendelErr/", mode: params.publish_dir_mode
 
      input:
-     set val(region), file(bcf), file(index) from ch_bcfs_mend_err_p1
+     set val(region), file(bcf), file(index) from ch_bcfs_mend_err_p1 
      each file(triodata_keep_file) from ch_triodata_keep_pheno
 
      output:
@@ -577,6 +586,7 @@ process pull_1kg_p3_sites {
            file("BED_trio_*.fam"),
            file("BED_trio_*.log") into ch_mend_err_p1_plink_files_p2,
                                        ch_mend_err_p1_plink_files_p3
+
 
      script:
      """
@@ -681,10 +691,12 @@ process mend_err_p3 {
     """
 }
 
+// NOTE: (Daniel's note) Just before this step is where we want a checklist, that all chunks are completed
 
 /*
 * STEP - aggregate_annotation:  Annotate and make pass/fail. If king set to T in env, print subset of cols
 */
+
 
 // Creating a joined tuple with all files that are needed for aggregate annotation step per input bcf file.
 
@@ -715,7 +727,10 @@ ch_joined_outputs_to_aggregate =
          .combine(ch_n_samples_files
                     .filter { it[0] =~ /chr[^X]/ }
                     .map { region, n_file -> [n_file]}
-                 )
+         )
+         .view()
+
+
 
 process aggregate_annotation {
     publishDir "${params.outdir}/Annotation/", mode: params.publish_dir_mode
@@ -777,3 +792,4 @@ def nfcoreHeader() {
     return """
     """.stripIndent()
 }
+
