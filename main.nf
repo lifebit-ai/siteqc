@@ -137,7 +137,17 @@ if (params.input.endsWith(".csv")) {
                         .map { bcf, index -> ['chr'+file(bcf).simpleName.split('_chr').last() , file(bcf), file(index)] }
                         // Filter out chunks from chrY and chrM - they should not be analysed in SiteQC pipeline
                         .filter { it[0] =~ /chr[^YM]/ }
-                        .set { ch_bcfs }
+                        .into { ch_bcfs_start_file;
+                                ch_bcfs_miss1;
+                                ch_bcfs_miss2;
+                                ch_bcfs_complete_sites;
+                                ch_bcfs_med_cov_all;
+                                ch_bcfs_med_cov_non_miss;
+                                ch_bcfs_median_gq;
+                                ch_bcfs_ab_ratio_p1;
+                                ch_bcfs_ab_ratio_p2;
+                                ch_bcfs_pull_ac;
+                                ch_bcfs_mend_err_p1 }
 
   Channel.fromPath(params.input)
          .ifEmpty { exit 1, "Input .csv list of input tissues not found at ${params.input}. Is the file path correct?" }
@@ -151,39 +161,26 @@ if (params.input.endsWith(".csv")) {
 
 }
 
-(ch_bcfs_start_file, 
-ch_bcfs_miss1, 
-ch_bcfs_miss2, 
-ch_bcfs_complete_sites,
-ch_bcfs_med_cov_all,
-ch_bcfs_med_cov_non_miss,
-ch_bcfs_median_gq,
-ch_bcfs_ab_ratio_p1,
-ch_bcfs_ab_ratio_p2,
-ch_bcfs_pull_ac,
-ch_bcfs_mend_err_p1) = ch_bcfs.into(11)
 
 // List with sample ids to include/exclude
-ch_xy_sample_id_files = Channel.fromPath(params.xy_sample_ids, checkIfExists: true)
-ch_xx_sample_id_files = Channel.fromPath(params.xx_sample_ids, checkIfExists: true)
-
-(ch_xy_sample_id_start_file, 
-ch_xy_sample_id_miss1, 
-ch_xy_sample_id_miss2, 
-ch_xy_sample_id_med_cov_all,
-ch_xy_sample_id_med_cov_non_miss,
-ch_xy_sample_id_median_gq,
-ch_xy_sample_id_ab_ratio_p1,
-ch_xy_sample_id_ab_ratio_p2) = ch_xy_sample_id_files.into(8)
-
-(ch_xx_sample_id_start_file, 
-ch_xx_sample_id_miss1, 
-ch_xx_sample_id_miss2, 
-ch_xx_sample_id_med_cov_all,
-ch_xx_sample_id_med_cov_non_miss,
-ch_xx_sample_id_median_gq,
-ch_xx_sample_id_ab_ratio_p1,
-ch_xx_sample_id_ab_ratio_p2) = ch_xx_sample_id_files.into(8)
+Channel.fromPath(params.xy_sample_ids, checkIfExists: true)
+                    .into { ch_xy_sample_id_start_file;
+                            ch_xy_sample_id_miss1;
+                            ch_xy_sample_id_miss2;
+                            ch_xy_sample_id_med_cov_all;
+                            ch_xy_sample_id_med_cov_non_miss;
+                            ch_xy_sample_id_median_gq;
+                            ch_xy_sample_id_ab_ratio_p1;
+                            ch_xy_sample_id_ab_ratio_p2 }
+Channel.fromPath(params.xx_sample_ids, checkIfExists: true)
+                    .into { ch_xx_sample_id_start_file;
+                            ch_xx_sample_id_miss1;
+                            ch_xx_sample_id_miss2;
+                            ch_xx_sample_id_med_cov_all;
+                            ch_xx_sample_id_med_cov_non_miss;
+                            ch_xx_sample_id_median_gq;
+                            ch_xx_sample_id_ab_ratio_p1;
+                            ch_xx_sample_id_ab_ratio_p2 }
 
 
 // Header log info
