@@ -325,7 +325,7 @@ process missingness_1 {
     """
     if [[ $region == *"chrX"* ]]; then
         bcftools query ${bcf} -f '${query_format_miss1}' -i '${query_include_miss1}' -S ${xy_sample_ids} | awk '${awk_expr_miss1}' > missing1_${region}_XY
-        bcftools query ${bcf} -f '${query_format_miss1}' -i '${query_include_miss1}' -S ${xy_sample_ids} | awk '${awk_expr_miss1}' > missing1_${region}_XY
+        bcftools query ${bcf} -f '${query_format_miss1}' -i '${query_include_miss1}' -S ${xx_sample_ids} | awk '${awk_expr_miss1}' > missing1_${region}_XX
     else
         bcftools query ${bcf} -f '${query_format_miss1}' -i '${query_include_miss1}' | awk '${awk_expr_miss1}' > missing1_${region}
     fi
@@ -415,7 +415,7 @@ process complete_sites {
      """
      if [[ $region == *"chrX"* ]]; then
          bcftools query ${bcf} -f '${query_format_med_cov_all}' -S ${xy_sample_ids} | awk '${awk_expr_med_cov_all}' > medianCoverageAll${region}_XY
-         bcftools query ${bcf} -f '${query_format_med_cov_all}' -S ${xy_sample_ids} | awk '${awk_expr_med_cov_all}' > medianCoverageAll${region}_XX 
+         bcftools query ${bcf} -f '${query_format_med_cov_all}' -S ${xx_sample_ids} | awk '${awk_expr_med_cov_all}' > medianCoverageAll${region}_XX
      else
          bcftools query ${bcf} -f '${query_format_med_cov_all}'| awk '${awk_expr_med_cov_all}' > medianCoverageAll${region}
      fi
