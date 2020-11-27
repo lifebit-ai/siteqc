@@ -135,7 +135,7 @@ if (params.input.endsWith(".csv")) {
                         .ifEmpty { exit 1, "Input .csv list of input tissues not found at ${params.input}. Is the file path correct?" }
                         .splitCsv(sep: ',',  skip: 1)
                         .map { bcf, index -> ['chr'+file(bcf).simpleName.split('_chr').last() , file(bcf), file(index)] }
-                        // Filter out chunks from chrY and chrM - they should not be analysed in SiteQC pipeline
+                        // Filter out chunks from chrY and chrM - they should not be analyzed in SiteQC pipeline
                         .filter { it[0] =~ /chr[^YM]/ }
                         .into { ch_bcfs_start_file;
                                 ch_bcfs_miss1;
@@ -797,4 +797,3 @@ def nfcoreHeader() {
     return """
     """.stripIndent()
 }
-
